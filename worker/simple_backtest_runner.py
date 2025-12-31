@@ -48,6 +48,10 @@ class SimpleBacktestRunner:
         """
         log.info(f"Starting backtest: {symbol} ({start_date} to {end_date})")
         log.info(f"Strategy: {strategy_class.__name__}")
+        log.info(f"Strategy class type: {type(strategy_class)}")
+        log.info(f"Strategy params attribute type: {type(getattr(strategy_class, 'params', None))}")
+        log.info(f"Strategy params received: {strategy_params}")
+        log.info(f"Preset name: {preset_name}")
         
         try:
             # 1. Load data using data-access-lib
@@ -75,10 +79,11 @@ class SimpleBacktestRunner:
             
             cerebro.broker.addcommissioninfo(CustomCommissionScheme())
             
-            # 3. Add strategy
+            # 3. Add strategy with parameters
             safe_params = strategy_params or {}
+            log.info(f"Strategy params received: {safe_params}")
             
-            # If preset_name is provided, use preset parameters
+            # If preset_name is provided, load preset parameters
             if preset_name:
                 try:
                     from quant_strategies.strategy_params.factory import create_strategy_with_params
@@ -86,16 +91,22 @@ class SimpleBacktestRunner:
                     # Override preset params with any explicit params
                     preset_params.update(safe_params)
                     safe_params = preset_params
-                except ImportError:
-                    print(f"[WARNING] Could not load preset '{preset_name}', using default parameters")
+                    log.info(f"Loaded preset '{preset_name}' with params: {safe_params}")
+                except ImportError as e:
+                    log.warning(f"Could not load preset '{preset_name}': {e}, using provided parameters")
             
+            # Add worker_mode flag for backtest context
             safe_params['worker_mode'] = 'backtest'
+            
+            log.info(f"Final params passed to strategy: {safe_params}")
             cerebro.addstrategy(strategy_class, **safe_params)
             
             # 4. Add analyzers to capture trade and performance data
             cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="tradeanalyzer")
             cerebro.addanalyzer(bt.analyzers.Transactions, _name="transactions")
             cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
+            cerebro.addanalyzer(bt.analyzers.Returns, _name="returns")
+            cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name="sharpe", riskfreerate=0.0)
             
             # 5. Create data feed from DataFrame
             feed = self._create_data_feed(df, symbol)
@@ -114,7 +125,9 @@ class SimpleBacktestRunner:
             # 6. Collect results
             results = self._collect_results(cerebro, strategy, symbol, start_date, end_date, initial_cash)
             
-            log.info(f"Backtest completed. Final value: {results['final_value']:,.2f}")
+            # Log completion with metrics
+            final_value = cerebro.broker.getvalue()
+            log.info(f"Backtest completed. Final value: {final_value:,.2f}")
             return results
             
         except Exception as e:
@@ -169,60 +182,159 @@ class SimpleBacktestRunner:
         return data
     
     def _collect_results(self, cerebro, strategy, symbol, start_date, end_date, initial_cash) -> Dict[str, Any]:
-        """Collect backtest results from Backtrader."""
+        """Collect backtest results from Backtrader in API-compatible format.
+        
+        Returns structure matching BacktestResultReport:
+        {
+            'metrics': BacktestResultMetrics,
+            'trades': List[BacktestTrade],
+            'equity_curve': List[BacktestEquityPoint]
+        }
+        """
         final_value = cerebro.broker.getvalue()
         profit = final_value - initial_cash
         profit_pct = (profit / initial_cash * 100) if initial_cash > 0 else 0
         
-        # Extract trade data prioritizing strategy's own logging
-        # (which only records actual executed trades, not all broker transactions)
-        trades = []
+        # Extract performance metrics from analyzers
+        metrics = self._extract_metrics(strategy, profit_pct)
         
-        # First, try to get trades from strategy's own logging (only actual trades)
-        strategy_trades = getattr(strategy, 'trades_log', [])
-        if strategy_trades:
-            trades = strategy_trades
-        else:
-            # Fallback to analyzers only if strategy logging is not available
-            if hasattr(strategy, 'analyzers'):
-                transactions = strategy.analyzers.getbyname('transactions')
-                ta = strategy.analyzers.getbyname('tradeanalyzer')
-                
-                # Only use Transactions analyzer if we don't have strategy trades
-                # Note: Transactions analyzer includes ALL broker transactions, not just trades
-                if transactions:
-                    transactions_data = transactions.get_analysis()
-                    if transactions_data:
-                        trades = self._format_trades_from_transactions(transactions_data)
-                # Fallback to trade analyzer if no transactions
-                elif ta:
-                    ta_dict = self._get_trade_analyzer_dict(ta)
-                    trades = self._format_trades_from_analyzer(ta_dict)
+        # Extract and format trades for API
+        trades = self._extract_api_trades(strategy)
         
         # Get equity curve from broker's value history
-        equity_history = getattr(strategy, 'equity_history', [])
-        equity_curve = []
-        if equity_history:
-            for date, value in equity_history:
-                equity_curve.append({
-                    'date': date.strftime('%Y%m%d') if hasattr(date, 'strftime') else str(date),
-                    'value': float(value)
-                })
+        equity_curve = self._extract_equity_curve(strategy)
         
+        # Return in API-compatible format
         results = {
-            'symbol': symbol,
-            'start_date': start_date,
-            'end_date': end_date,
-            'initial_cash': float(initial_cash),
-            'final_value': float(final_value),
-            'total_profit': float(profit),
-            'profit_percentage': float(profit_pct),
+            'metrics': metrics,
             'trades': trades,
             'equity_curve': equity_curve,
-            'strategy_name': strategy.__class__.__name__,
         }
         
         return results
+    
+    def _extract_metrics(self, strategy, total_return_pct) -> Dict[str, Any]:
+        """Extract performance metrics matching BacktestResultMetrics schema.
+        
+        Note: Returns metrics in decimal format (0-1 range) for frontend display.
+        Frontend will multiply by 100 to show percentages.
+        """
+        metrics = {
+            'total_return': total_return_pct / 100,  # Convert to decimal
+            'sharpe_ratio': None,
+            'max_drawdown': None,
+            'win_rate': None,
+            'total_trades': None
+        }
+        
+        if not hasattr(strategy, 'analyzers'):
+            return metrics
+        
+        # Extract Returns (Backtrader returns decimal, keep as decimal for API)
+        try:
+            returns_analyzer = strategy.analyzers.getbyname('returns')
+            returns_data = returns_analyzer.get_analysis()
+            rtot = returns_data.get('rtot', 0)
+            log.info(f"[DEBUG] Returns analyzer rtot: {rtot}")
+            # Keep as decimal (e.g., 0.0147 for 1.47%)
+            metrics['total_return'] = rtot
+        except Exception as e:
+            log.warning(f"[DEBUG] Failed to extract returns: {e}")
+            pass
+        
+        # Extract Sharpe Ratio
+        try:
+            sharpe_analyzer = strategy.analyzers.getbyname('sharpe')
+            sharpe_data = sharpe_analyzer.get_analysis()
+            sharpe_ratio = sharpe_data.get('sharperatio', None)
+            metrics['sharpe_ratio'] = sharpe_ratio if sharpe_ratio is not None else 0.0
+        except Exception:
+            metrics['sharpe_ratio'] = 0.0
+        
+        # Extract Max Drawdown (Backtrader returns percentage value like 3.69 for 3.69%)
+        try:
+            dd_analyzer = strategy.analyzers.getbyname('drawdown')
+            dd_data = dd_analyzer.get_analysis()
+            dd_value = dd_data.get('max', {}).get('drawdown', 0)
+            log.info(f"[DEBUG] Drawdown analyzer value: {dd_value}")
+            # Backtrader returns percentage (e.g., 3.69 for 3.69%), convert to decimal (0.0369)
+            metrics['max_drawdown'] = dd_value / 100
+        except Exception as e:
+            log.warning(f"[DEBUG] Failed to extract drawdown: {e}")
+            pass
+        
+        # Extract Trade Stats
+        try:
+            ta = strategy.analyzers.getbyname('tradeanalyzer')
+            ta_data = ta.get_analysis()
+            total_closed = ta_data.get('total', {}).get('closed', 0)
+            won_total = ta_data.get('won', {}).get('total', 0)
+            log.info(f"[DEBUG] Trade analyzer - total_closed: {total_closed}, won_total: {won_total}")
+            
+            metrics['total_trades'] = total_closed
+            # Calculate win rate as decimal (e.g., 1.0 for 100%)
+            metrics['win_rate'] = (won_total / total_closed) if total_closed > 0 else 0
+            log.info(f"[DEBUG] Calculated win_rate: {metrics['win_rate']}")
+        except Exception as e:
+            log.warning(f"[DEBUG] Failed to extract trade stats: {e}")
+            pass
+        
+        return metrics
+    
+    def _extract_api_trades(self, strategy) -> list:
+        """Extract trades in API format matching BacktestTrade schema.
+        
+        BacktestTrade schema:
+        - datetime: str
+        - action: str (buy/sell)
+        - price: float
+        - quantity: int
+        - commission: float
+        - pnl: float
+        - cumulative_pnl: float
+        """
+        trades = []
+        
+        # Try strategy's own trades_log first
+        strategy_trades = getattr(strategy, 'trades_log', [])
+        if strategy_trades:
+            for trade in strategy_trades:
+                # Normalize action to lowercase for API compatibility
+                action = trade.get('action', 'unknown')
+                if isinstance(action, str):
+                    action = action.lower()  # Convert 'BUY'/'SELL' to 'buy'/'sell'
+                
+                api_trade = {
+                    'datetime': trade.get('datetime').strftime('%Y-%m-%d %H:%M:%S') if hasattr(trade.get('datetime'), 'strftime') else str(trade.get('datetime', '')),
+                    'action': action,
+                    'price': float(trade.get('price', 0)),
+                    'quantity': int(trade.get('size', 0)),  # Map 'size' to 'quantity'
+                    'commission': 0.0,  # Strategy trades_log doesn't track commission
+                    'pnl': float(trade.get('realized_pl', 0)),
+                    'cumulative_pnl': float(trade.get('cum_pl', 0))
+                }
+                trades.append(api_trade)
+        
+        return trades
+    
+    def _extract_equity_curve(self, strategy) -> list:
+        """Extract equity curve matching BacktestEquityPoint schema.
+        
+        BacktestEquityPoint schema:
+        - date: str
+        - value: float
+        """
+        equity_curve = []
+        equity_history = getattr(strategy, 'equity_history', [])
+        
+        if equity_history:
+            for date, value in equity_history:
+                equity_curve.append({
+                    'date': date.strftime('%Y-%m-%d') if hasattr(date, 'strftime') else str(date),
+                    'value': float(value)
+                })
+        
+        return equity_curve
     
     def _get_trade_analyzer_dict(self, analyzer):
         """Convert trade analyzer to dictionary."""

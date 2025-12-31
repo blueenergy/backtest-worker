@@ -170,7 +170,7 @@ def calculate_performance_metrics(equity_curve):
     }
 
 
-def generate_advanced_plots_and_reports(results, output_dir, symbol, strategy_name, no_plot=False, no_report=False):
+def generate_advanced_plots_and_reports(results, output_dir, symbol, strategy_name, start_date, end_date, initial_cash, no_plot=False, no_report=False):
     """Generate advanced plots and reports using stock-execution-system patterns."""
     try:
         # Import plotting and reporting utilities
@@ -197,16 +197,16 @@ def generate_advanced_plots_and_reports(results, output_dir, symbol, strategy_na
             import numpy as np
             
             # Create mock price data based on the backtest period
-            start_date = datetime.strptime(results['start_date'], '%Y%m%d')
-            end_date = datetime.strptime(results['end_date'], '%Y%m%d')
+            start_dt = datetime.strptime(start_date, '%Y%m%d')
+            end_dt = datetime.strptime(end_date, '%Y%m%d')
             
             # Create date range
-            date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+            date_range = pd.date_range(start=start_dt, end=end_dt, freq='D')
             
             # Create mock price data
             np.random.seed(42)  # For reproducible results
             returns = np.random.normal(0.0005, 0.02, len(date_range))  # Daily returns
-            prices = [results['initial_cash']]
+            prices = [initial_cash]
             for r in returns[1:]:
                 prices.append(prices[-1] * (1 + r))
             
@@ -222,19 +222,26 @@ def generate_advanced_plots_and_reports(results, output_dir, symbol, strategy_na
             # Convert trades to the format expected by plotting function (if any exist)
             plot_trades = []
             for i, trade in enumerate(trades[:20]):  # Limit to first 20 trades for clarity
+                # Parse datetime string to datetime object
+                trade_dt = trade.get('datetime', '')
+                if isinstance(trade_dt, str):
+                    try:
+                        trade_dt = pd.to_datetime(trade_dt)
+                    except:
+                        trade_dt = date_range[min(i, len(date_range)-1)]
+                
                 # Map the trade fields to the expected format for plotting
-                # BUG FIX: Use 'datetime' not 'timestamp' - matches results.json field name
                 plot_trades.append({
-                    'datetime': trade.get('datetime', pd.to_datetime(trade.get('timestamp', date_range[min(i, len(date_range)-1)]))),
+                    'datetime': trade_dt,
                     'action': trade.get('action', 'BUY').upper(),
-                    'size': trade.get('size', trade.get('quantity', 100)),  # Handle different field names
-                    'price': trade.get('price', trade.get('avg_price', df['close'].iloc[min(i, len(df)-1)] if len(df) > 0 else 100)),
-                    'position_after': trade.get('position_after', trade.get('size', 100)),
-                    'avg_cost': trade.get('avg_cost', trade.get('price', df['close'].iloc[min(i, len(df)-1)] if len(df) > 0 else 100)),
-                    'realized_pl': trade.get('realized_pl', trade.get('pnl', 0)),
-                    'cum_pl': trade.get('cumulative_pl', 0),
-                    'unrealized_pl': trade.get('unrealized_pl', 0),
-                    'total_pl': trade.get('total_pl', 0),
+                    'size': trade.get('quantity', trade.get('size', 100)),
+                    'price': trade.get('price', df['close'].iloc[min(i, len(df)-1)] if len(df) > 0 else 100),
+                    'position_after': trade.get('quantity', 100),
+                    'avg_cost': trade.get('price', df['close'].iloc[min(i, len(df)-1)] if len(df) > 0 else 100),
+                    'realized_pl': trade.get('pnl', 0),
+                    'cum_pl': trade.get('cumulative_pnl', 0),
+                    'unrealized_pl': 0,
+                    'total_pl': trade.get('cumulative_pnl', 0),
                 })
             
             # Generate plot
@@ -259,12 +266,12 @@ def generate_advanced_plots_and_reports(results, output_dir, symbol, strategy_na
                     # Create mock price map for report generation
                     price_map = {symbol: df}
                     symbols = [symbol]
-                    initial_capital = results['initial_cash']
+                    # Use initial_cash parameter instead of results field
                     
                     report_path = generate_quantstats_report(
                         price_map=price_map,
                         symbols=symbols,
-                        initial_capital=initial_capital,
+                        initial_capital=initial_cash,
                         output_dir=output_path,
                         title=f"{strategy_name.upper()} Strategy - {symbol}"
                     )
@@ -343,22 +350,52 @@ def main():
         print("\n" + "=" * 80)
         print("[BACKTEST RESULTS]")
         print("=" * 80)
-        print(f"Strategy: {results.get('strategy_name', 'Unknown')}")
-        print(f"Symbol: {results['symbol']}")
-        print(f"Period: {results['start_date']} to {results['end_date']}")
-        print(f"Initial Cash: {results['initial_cash']:,.2f}")
-        print(f"Final Value: {results['final_value']:,.2f}")
-        print(f"Total Profit: {results['total_profit']:,.2f}")
-        print(f"Total Return: {results['profit_percentage']:.2f}%")
-        print(f"Total Trades: {len(results.get('trades', []))}")
-        print(f"Equity Points: {len(results.get('equity_curve', []))}")
         
-        # Calculate and display performance metrics
+        # DEBUG: Print actual results structure
+        print(f"\n[DEBUG] Results keys: {list(results.keys())}")
+        print(f"[DEBUG] Results structure: {type(results)}")
+        
+        # Extract metrics from new result structure
+        metrics = results.get('metrics', {})
+        print(f"[DEBUG] Metrics content: {metrics}")
+        
+        trades = results.get('trades', [])
         equity_curve = results.get('equity_curve', [])
+        
+        # DEBUG: Check equity curve for drawdown calculation
         if equity_curve and len(equity_curve) >= 2:
-            metrics = calculate_performance_metrics(equity_curve)
-            print(f"Max Drawdown: {metrics['max_drawdown']:.2%}")
-            print(f"Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
+            values = [point['value'] for point in equity_curve]
+            print(f"[DEBUG] Equity curve - First: {values[0]:.2f}, Max: {max(values):.2f}, Min: {min(values):.2f}, Last: {values[-1]:.2f}")
+            # Manual drawdown calculation
+            import numpy as np
+            values_np = np.array(values)
+            running_max = np.maximum.accumulate(values_np)
+            drawdown = (values_np - running_max) / running_max
+            manual_max_dd = np.min(drawdown)
+            print(f"[DEBUG] Manual max drawdown calculation: {manual_max_dd:.4f} ({manual_max_dd*100:.2f}%)")
+        
+        print(f"\nStrategy: {args.strategy}")
+        print(f"Symbol: {args.symbol}")
+        print(f"Period: {args.start} to {args.end}")
+        print(f"Initial Cash: {args.cash:,.2f}")
+        
+        # Calculate final value from equity curve
+        final_value = equity_curve[-1]['value'] if equity_curve else args.cash
+        total_profit = final_value - args.cash
+        total_return = metrics.get('total_return', 0) * 100  # Convert to percentage
+        
+        print(f"Final Value: {final_value:,.2f}")
+        print(f"Total Profit: {total_profit:,.2f}")
+        print(f"Total Return: {total_return:.2f}%")
+        print(f"Total Trades: {len(trades)}")
+        print(f"Equity Points: {len(equity_curve)}")
+        
+        # Display performance metrics from results
+        max_drawdown = metrics.get('max_drawdown', 0)
+        sharpe_ratio = metrics.get('sharpe_ratio', 0)
+        
+        print(f"Max Drawdown: {max_drawdown:.2%}")
+        print(f"Sharpe Ratio: {sharpe_ratio:.2f}")
                 
         print("="*80)
         
@@ -387,6 +424,9 @@ def main():
                 output_dir=output_dir,
                 symbol=args.symbol,
                 strategy_name=args.strategy,
+                start_date=args.start,
+                end_date=args.end,
+                initial_cash=args.cash,
                 no_plot=args.no_plot,
                 no_report=args.no_report
             )
