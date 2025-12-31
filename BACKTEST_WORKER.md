@@ -9,6 +9,12 @@ python run_local_backtest.py --symbol AAPL --strategy turtle --start 20230101 --
 # With custom parameters
 python run_local_backtest.py --symbol TSLA --strategy grid --start 20230101 --end 20231231 --param grid_pct=0.02 --param max_batches=5
 
+# Single Yang Not Broken Strategy (单阳不破)
+python run_local_backtest.py --symbol 002050.SZ --strategy single_yang --start 20230101 --end 20231231 --param big_yang_rate=0.05 --param max_consolidate_days=8
+
+# Hidden Dragon Low Suction Strategy (潜龙低吸)
+python run_local_backtest.py --symbol 002050.SZ --strategy hidden_dragon --start 20230101 --end 20231231 --param min_boom_days=1 --param entry_ma_period=60
+
 # With custom cash amount
 python run_local_backtest.py --symbol MSFT --strategy turtle --start 20230101 --end 20231231 --cash 50000
 
@@ -28,9 +34,9 @@ python run_local_backtest.py --symbol AAPL --strategy turtle --start 20230101 --
 ### Local Runner Options
 
 | Option | Description | Default |
-|--------|-------------|---------|
+|--------|-------------|---------|  
 | `--symbol` | Stock symbol to backtest | Required |
-| `--strategy` | Strategy to use (turtle, grid) | Required |
+| `--strategy` | Strategy to use (turtle, grid, single_yang, hidden_dragon) | Required |
 | `--start` | Start date (YYYYMMDD) | Required |
 | `--end` | End date (YYYYMMDD) | Required |
 | `--cash` | Initial cash amount | `100000.0` |
@@ -53,6 +59,8 @@ The local backtest runner now includes advanced visualization and reporting capa
 
 - `turtle`: Turtle Trading Strategy (trend following with ATR-based position sizing)
 - `grid`: Grid Trading Strategy (mean reversion with grid levels)
+- `single_yang`: Single Yang Not Broken Strategy (单阳不破 - breakout after consolidation)
+- `hidden_dragon`: Hidden Dragon Low Suction Strategy (潜龙低吸 - limit-up pullback entry)
 
 ### Strategy Parameters
 
@@ -67,6 +75,93 @@ The local backtest runner now includes advanced visualization and reporting capa
 - `grid_pct`: Grid interval as percentage (default: 0.03)
 - `batch_size`: Shares per batch (default: 1000)
 - `max_batches`: Maximum concurrent positions (default: 5)
+
+**Single Yang Not Broken Strategy (单阳不破):**
+- `big_yang_rate`: Big yang candle threshold (default: 0.05, i.e., 5% gain)
+- `vol_expand_rate`: Volume expansion multiplier (default: 1.5x)
+- `max_consolidate_days`: Maximum consolidation days (default: 8)
+- `breakout_vol_rate`: Breakout volume multiplier (default: 1.2x)
+- `position_pct`: Position size as percentage (default: 0.3)
+- `stop_loss_mode`: Stop loss mode - 'yang_low' or 'pct' (default: 'yang_low')
+- `stop_loss_pct`: Fixed stop loss percentage (default: 0.05)
+- `take_profit_pct`: Take profit percentage (default: 0.15, 0=disabled)
+- `trailing_stop_pct`: Trailing stop percentage (default: 0, disabled)
+- `exit_ma_period`: MA period for exit signal (default: 20, 0=disabled)
+
+**Hidden Dragon Low Suction Strategy (潜龙低吸):**
+- `limit_up_rate`: Limit-up threshold (default: 0.095, i.e., ~10%)
+- `min_boom_days`: Minimum consecutive limit-up days (default: 1)
+- `max_callback_days`: Maximum pullback observation days (default: 20)
+- `stop_loss_rate`: Stop loss percentage (default: 0.05)
+- `position_pct`: Position size as percentage (default: 0.3)
+- `volume_shrink_pct`: Volume contraction threshold (default: 0.6)
+- `ma_proximity_pct`: MA proximity threshold (default: 0.01, i.e., 1%)
+- `entry_ma_period`: Entry MA period (default: 60)
+- `exit_ma_period`: Exit MA period (default: 60)
+- `take_profit_pct`: Take profit percentage (default: 0, disabled)
+- `trailing_stop_pct`: Trailing stop percentage (default: 0.05)
+
+## Parameter Optimization
+
+The backtest-worker includes parameter optimization scripts for each strategy to find optimal parameter combinations:
+
+### Grid Strategy Optimization
+
+```bash
+python optimize_grid_params.py --symbol 002050.SZ --start 20230101 --end 20251226 --cash 100000
+```
+
+**Optimizes:**
+- `grid_pct`: Grid interval (2%, 3%, 4%, 5%)
+- `max_batches`: Maximum positions (3, 5, 7)
+- Total: 12 combinations
+
+### Turtle Strategy Optimization
+
+```bash
+python optimize_turtle_params.py --symbol 002050.SZ --start 20230101 --end 20251226 --cash 100000
+```
+
+**Optimizes:**
+- `entry_window`: Entry breakout window (20, 55)
+- `exit_window`: Exit breakout window (10, 20)
+- `risk_pct`: Risk per trade (1%, 2%, 3%)
+- `max_units`: Maximum units (2, 4)
+- Total: 24 combinations
+
+### Single Yang Not Broken Strategy Optimization
+
+```bash
+python optimize_single_yang_params.py --symbol 002050.SZ --start 20230101 --end 20251226 --cash 100000
+```
+
+**Optimizes:**
+- `big_yang_rate`: Big yang threshold (3%, 5%, 7%)
+- `max_consolidate_days`: Consolidation period (5, 8, 10)
+- `stop_loss_mode`: Stop loss mode ('yang_low', 'pct')
+- `take_profit_pct`: Take profit (0%, 10%, 15%)
+- Total: 54 combinations
+
+### Hidden Dragon Low Suction Strategy Optimization
+
+```bash
+python optimize_hidden_dragon_params.py --symbol 002050.SZ --start 20230101 --end 20251226 --cash 100000
+```
+
+**Optimizes:**
+- `min_boom_days`: Consecutive limit-up days (1, 2)
+- `entry_ma_period`: Entry MA period (10, 20, 60)
+- `max_callback_days`: Max callback days (10, 20, 30)
+- `volume_shrink_pct`: Volume contraction (60%, 80%)
+- Total: 36 combinations
+
+### Optimization Output
+
+All optimization scripts provide:
+- **🏆 Top 3 by Total Return**: Highest profit percentage
+- **📊 Top 3 by Sharpe Ratio**: Best risk-adjusted returns
+- **🛡️ Top 3 by Lowest Drawdown**: Minimum risk
+- **📈 Top 3 by Most Trades**: Most active combinations (Turtle/Single Yang/Hidden Dragon only)
 
 ## Command Line Arguments
 
