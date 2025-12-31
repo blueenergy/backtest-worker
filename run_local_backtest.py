@@ -9,6 +9,8 @@ Includes advanced plotting and reporting capabilities from stock-execution-syste
 Usage:
     python run_local_backtest.py --symbol AAPL --strategy turtle --start 20230101 --end 20231231
     python run_local_backtest.py --symbol TSLA --strategy grid --param grid_pct=0.02 --param max_batches=5
+    python run_local_backtest.py --symbol 002050.SZ --strategy single_yang --start 20230101 --end 20231231
+    python run_local_backtest.py --symbol 002050.SZ --strategy hidden_dragon --start 20230101 --end 20231231
 """
 
 import argparse
@@ -17,6 +19,12 @@ from pathlib import Path
 import json
 import pandas as pd
 from datetime import datetime
+
+# Add parent directory to path for strategy imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Import STRATEGY_MAP early to use in argparse
+from strategies import STRATEGY_MAP
 
 # Add worker to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -39,8 +47,8 @@ def parse_args():
     parser.add_argument(
         "--strategy",
         required=True,
-        choices=["turtle", "grid"],
-        help="Strategy to use (turtle, grid)"
+        choices=list(STRATEGY_MAP.keys()),
+        help=f"Strategy to use (available: {', '.join(STRATEGY_MAP.keys())})"
     )
     
     parser.add_argument(
@@ -125,6 +133,43 @@ def parse_params(param_list):
     return params
 
 
+def calculate_performance_metrics(equity_curve):
+    """Calculate Max Drawdown and Sharpe Ratio from equity curve.
+    
+    Args:
+        equity_curve: List of {'date': str, 'value': float}
+    
+    Returns:
+        dict with 'max_drawdown' and 'sharpe_ratio'
+    """
+    if not equity_curve or len(equity_curve) < 2:
+        return {'max_drawdown': 0.0, 'sharpe_ratio': 0.0}
+    
+    import numpy as np
+    
+    values = np.array([point['value'] for point in equity_curve])
+    
+    # Max Drawdown
+    running_max = np.maximum.accumulate(values)
+    drawdown = (values - running_max) / running_max
+    max_drawdown = np.min(drawdown)  # Most negative value
+    
+    # Sharpe Ratio (annualized)
+    returns = np.diff(values) / values[:-1]  # Daily returns
+    if len(returns) > 0 and np.std(returns) > 0:
+        avg_return = np.mean(returns)
+        std_return = np.std(returns)
+        # Annualize: assume 252 trading days
+        sharpe_ratio = (avg_return / std_return) * np.sqrt(252)
+    else:
+        sharpe_ratio = 0.0
+    
+    return {
+        'max_drawdown': float(max_drawdown),
+        'sharpe_ratio': float(sharpe_ratio)
+    }
+
+
 def generate_advanced_plots_and_reports(results, output_dir, symbol, strategy_name, no_plot=False, no_report=False):
     """Generate advanced plots and reports using stock-execution-system patterns."""
     try:
@@ -178,8 +223,9 @@ def generate_advanced_plots_and_reports(results, output_dir, symbol, strategy_na
             plot_trades = []
             for i, trade in enumerate(trades[:20]):  # Limit to first 20 trades for clarity
                 # Map the trade fields to the expected format for plotting
+                # BUG FIX: Use 'datetime' not 'timestamp' - matches results.json field name
                 plot_trades.append({
-                    'datetime': pd.to_datetime(trade.get('timestamp', date_range[min(i, len(date_range)-1)])),
+                    'datetime': trade.get('datetime', pd.to_datetime(trade.get('timestamp', date_range[min(i, len(date_range)-1)]))),
                     'action': trade.get('action', 'BUY').upper(),
                     'size': trade.get('size', trade.get('quantity', 100)),  # Handle different field names
                     'price': trade.get('price', trade.get('avg_price', df['close'].iloc[min(i, len(df)-1)] if len(df) > 0 else 100)),
@@ -266,9 +312,7 @@ def main():
     print("=" * 80)
     
     try:
-        # Import strategy based on name
-        from strategies import STRATEGY_MAP
-        
+        # Get strategy class from STRATEGY_MAP (already imported at top)
         if args.strategy not in STRATEGY_MAP:
             print(f"❌ Error: Unknown strategy '{args.strategy}'")
             print(f"Available strategies: {list(STRATEGY_MAP.keys())}")
@@ -305,18 +349,18 @@ def main():
         print(f"Initial Cash: {results['initial_cash']:,.2f}")
         print(f"Final Value: {results['final_value']:,.2f}")
         print(f"Total Profit: {results['total_profit']:,.2f}")
-        print(f"Total Return: {results['profit_percentage']:.2%}")
+        print(f"Total Return: {results['profit_percentage']:.2f}%")
         print(f"Total Trades: {len(results.get('trades', []))}")
         print(f"Equity Points: {len(results.get('equity_curve', []))}")
         
-        # Calculate additional metrics if possible
-        trades = results.get('trades', [])
-        if trades:
-            winning_trades = sum(1 for t in trades if (t.get('realized_pl', 0) or 0) > 0)
-            win_rate = winning_trades / len(trades) if trades else 0
-            print(f"Win Rate: {win_rate:.2%} ({winning_trades}/{len(trades)})")
-        
-        print("=" * 80)
+        # Calculate and display performance metrics
+        equity_curve = results.get('equity_curve', [])
+        if equity_curve and len(equity_curve) >= 2:
+            metrics = calculate_performance_metrics(equity_curve)
+            print(f"Max Drawdown: {metrics['max_drawdown']:.2%}")
+            print(f"Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
+                
+        print("="*80)
         
         # Create output directory
         output_dir = create_output_directory(args.output_dir, args.symbol, args.strategy)
