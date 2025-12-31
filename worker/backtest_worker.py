@@ -25,8 +25,11 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import requests
 
-from worker.simple_backtest_runner import SimpleBacktestRunner
-from strategies import STRATEGY_MAP
+# Add parent directory to path for strategy imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from simple_backtest_runner import SimpleBacktestRunner
+from quant_strategies.strategies import STRATEGY_MAP
 
 # Configure logging
 logging.basicConfig(
@@ -208,92 +211,20 @@ class BacktestWorkerService:
         Returns:
             Formatted results dict with metrics
         """
-        initial_cash = raw_results['initial_cash']
-        final_value = raw_results['final_value']
-        equity_curve = raw_results['equity_curve']
-        trades = raw_results['trades']
+        # SimpleBacktestRunner already returns API-compatible format:
+        # {'metrics': {...}, 'trades': [...], 'equity_curve': [...]}
         
-        # Calculate total return
-        total_return = (final_value - initial_cash) / initial_cash if initial_cash > 0 else 0
+        # Extract metrics for logging
+        metrics = raw_results.get('metrics', {})
+        total_return = metrics.get('total_return', 0)
+        max_drawdown = metrics.get('max_drawdown', 0)
+        win_rate = metrics.get('win_rate', 0)
+        total_trades = metrics.get('total_trades', 0)
         
-        # Calculate max drawdown
-        max_drawdown = 0.0
-        if equity_curve:
-            peak = equity_curve[0]['value']
-            for point in equity_curve:
-                value = point['value']
-                if value > peak:
-                    peak = value
-                drawdown = (value - peak) / peak
-                if drawdown < max_drawdown:
-                    max_drawdown = drawdown
+        log.info(f"Results: Return={total_return:.2f}%, MaxDD={max_drawdown:.2f}%, "
+                f"WinRate={win_rate:.2f}%, Trades={total_trades}")
         
-        # Calculate win rate
-        win_rate = 0.0
-        total_trades = len(trades)
-        if total_trades > 0:
-            # Assume trades are dicts with 'pnl' key, or lists [entry_price, exit_price]
-            winning_trades = 0
-            for trade in trades:
-                if isinstance(trade, dict) and trade.get('pnl', 0) > 0:
-                    winning_trades += 1
-                elif isinstance(trade, (list, tuple)) and len(trade) >= 2:
-                    # [entry_price, exit_price]
-                    if trade[1] > trade[0]:
-                        winning_trades += 1
-            win_rate = winning_trades / total_trades if total_trades > 0 else 0
-        
-        # Calculate Sharpe ratio (simplified)
-        sharpe_ratio = None
-        if equity_curve and len(equity_curve) > 1:
-            returns = []
-            for i in range(1, len(equity_curve)):
-                curr = equity_curve[i]['value']
-                prev = equity_curve[i-1]['value']
-                ret = (curr - prev) / prev if prev > 0 else 0
-                returns.append(ret)
-            
-            if len(returns) > 1:
-                mean_return = statistics.mean(returns)
-                std_return = statistics.stdev(returns)
-                sharpe_ratio = (mean_return / std_return * (252 ** 0.5)) if std_return > 0 else 0
-        
-        # Profit/loss ratio
-        profit_loss_ratio = None
-        winning_pnl = 0
-        losing_pnl = 0
-        for trade in trades:
-            if isinstance(trade, dict) and 'pnl' in trade:
-                pnl = trade['pnl']
-                if pnl > 0:
-                    winning_pnl += pnl
-                else:
-                    losing_pnl += abs(pnl)
-        
-        if losing_pnl > 0:
-            profit_loss_ratio = winning_pnl / losing_pnl
-        
-        # Format results
-        results = {
-            'metrics': {
-                'total_return': round(total_return, 4),
-                'max_drawdown': round(max_drawdown, 4),
-                'win_rate': round(win_rate, 4),
-                'sharpe_ratio': round(sharpe_ratio, 2) if sharpe_ratio is not None else None,
-                'total_trades': total_trades,
-                'profit_loss_ratio': round(profit_loss_ratio, 2) if profit_loss_ratio is not None else None,
-                'final_value': round(final_value, 2),
-                'total_profit': round(final_value - initial_cash, 2)
-            },
-            'equity_curve': equity_curve,
-            'trades': trades,
-            'strategy_name': raw_results.get('strategy_name', 'Unknown')
-        }
-        
-        log.info(f"Results: Return={total_return:.2%}, MaxDD={max_drawdown:.2%}, "
-                f"WinRate={win_rate:.2%}, Trades={total_trades}")
-        
-        return results
+        return raw_results
     
     def report_success(self, task_id: str, results: Dict[str, Any]) -> bool:
         """
@@ -301,20 +232,18 @@ class BacktestWorkerService:
         
         Args:
             task_id: ID of the completed task
-            results: Backtest results
+            results: Backtest results in API format (metrics, trades, equity_curve)
             
         Returns:
             True if reported successfully, False otherwise
         """
         try:
+            # Results already in API-compatible format from SimpleBacktestRunner
+            # Structure: {'metrics': {...}, 'trades': [...], 'equity_curve': [...]}
             response = requests.post(
                 f"{self.api_base}/backtest/tasks/{task_id}/report",
                 headers=self._get_headers(),
-                json={
-                    'worker_id': self.worker_id,
-                    'status': 'completed',
-                    'result_data': results
-                },
+                json=results,  # Send results directly without wrapping
                 timeout=30
             )
             
@@ -323,6 +252,12 @@ class BacktestWorkerService:
                 return True
             else:
                 log.error(f"Failed to report results for {task_id}: {response.status_code}")
+                # Log response body for debugging
+                try:
+                    error_detail = response.json()
+                    log.error(f"Server response: {error_detail}")
+                except Exception:
+                    log.error(f"Server response (text): {response.text[:500]}")
                 return False
                 
         except requests.exceptions.RequestException as e:

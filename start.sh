@@ -3,8 +3,18 @@
 
 CONFIG_FILE=${1:-"config.json"}
 
-cd "$(dirname "$0")/worker"
+# Get the project root directory
+PROJECT_ROOT="$(realpath "$(dirname "$0")")"
+echo "Project root: $PROJECT_ROOT"
+# Change to worker directory
+cd "$PROJECT_ROOT/worker"
 
+# Convert config path to absolute path from project root
+if [[ "$CONFIG_FILE" != /* ]]; then
+    # Relative path - resolve from project root
+    CONFIG_FILE="$PROJECT_ROOT/$CONFIG_FILE"
+fi
+echo "Config file: $CONFIG_FILE"
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "❌ Config file not found: $CONFIG_FILE"
     echo ""
