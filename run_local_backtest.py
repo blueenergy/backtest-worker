@@ -24,7 +24,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Import STRATEGY_MAP early to use in argparse
-from strategies import STRATEGY_MAP
+from quant_strategies.strategies import STRATEGY_MAP
 
 # Add worker to path
 sys.path.insert(0, str(Path(__file__).parent))

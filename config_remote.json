@@ -1,0 +1,31 @@
+{
+  "api_base_url": "http://180.184.30.225:3001/api",
+  "api_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJzaHV5b2xpbiIsImV4cCI6MTc5ODk4MzEzMX0.BE-A8yQd9T4vQ-txmmpXzl7DmqmvpJct8ieUoYjR0C4",
+  "worker_id": "backtest_worker_001",
+  "poll_interval": 5.0,
+  "log_level": "INFO",
+  
+  "data_strategy": {
+    "use_cache": true,
+    "cache_dir": "../cache",
+    "source_priority": [
+      "cache",
+      "stock_access"
+    ]
+  },
+  
+  "data_sources": {
+    "stock_access": {
+      "enabled": true,
+      "minute": false
+    },
+    "tushare": {
+      "enabled": false,
+      "token": "your_tushare_token_here"
+    },
+    "csv": {
+      "enabled": false,
+      "data_dir": "/data/stocks"
+    }
+  }
+}
