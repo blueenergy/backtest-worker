@@ -80,7 +80,11 @@ class SimpleBacktestRunner:
             cerebro.broker.addcommissioninfo(CustomCommissionScheme())
             
             # 3. Add strategy with parameters
-            safe_params = strategy_params or {}
+            if strategy_params is not None and hasattr(strategy_params, 'to_dict'):
+                safe_params = strategy_params.to_dict()
+            else:
+                safe_params = (strategy_params or {}).copy() if strategy_params else {}
+            
             log.info(f"Strategy params received: {safe_params}")
             
             # If preset_name is provided, load preset parameters
