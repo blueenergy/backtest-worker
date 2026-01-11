@@ -229,6 +229,7 @@ def main() -> None:
         total += 1
         try:
             log.debug("Running backtest for %s", sym)
+            params_used = dict(strategy_params) if isinstance(strategy_params, dict) else {}
             results = runner.run_backtest(
                 symbol=sym,
                 strategy_class=strategy_class,
@@ -312,6 +313,7 @@ def main() -> None:
                 "preset": preset_name or "default",
                 "symbol": sym,
                 "name": stock_name,
+                "params_used": params_used,
                 "action": action.upper(),  # BUY or SELL
                 "price": tr.get("price"),
                 "quantity": tr.get("quantity", 0),
@@ -353,6 +355,7 @@ def main() -> None:
                         "preset": preset_name or "default",
                         "symbol": sym,
                         "name": stock_name,
+                        "params_used": params_used,
                         "action": "BUY",
                         "price": tr.get("price"),
                         "last_datetime": dt_str,
