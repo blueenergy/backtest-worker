@@ -61,7 +61,13 @@ class SimpleBacktestRunner:
             if df is None or df.empty:
                 raise ValueError(f"No data found for {symbol} ({start_date}-{end_date})")
             
-            log.info(f"Loaded {len(df)} bars")
+            n_bars = len(df)
+            log.info(f"Loaded {n_bars} bars")
+
+            # Quick pre-check: estimate minimum required bars from strategy params/class
+            min_required = self._estimate_required_bars(strategy_class, safe_params if 'safe_params' in locals() else strategy_params)
+            if n_bars < min_required:
+                raise ValueError(f"Not enough data for strategy {strategy_class.__name__}: need at least {min_required} bars, got {n_bars}")
             
             # 2. Setup Backtrader
             cerebro = bt.Cerebro()
@@ -99,6 +105,9 @@ class SimpleBacktestRunner:
                 except ImportError as e:
                     log.warning(f"Could not load preset '{preset_name}': {e}, using provided parameters")
             
+            # Coerce parameter types based on strategy defaults to avoid str vs int/float issues
+            safe_params = self._coerce_params(strategy_class, safe_params)
+
             # Add worker_mode flag for backtest context
             safe_params['worker_mode'] = 'backtest'
             
@@ -184,6 +193,118 @@ class SimpleBacktestRunner:
             data.stock_name = symbol
         
         return data
+
+    def _estimate_required_bars(self, strategy_class: type, strategy_params: Optional[Dict[str, Any]] = None) -> int:
+        """Estimate minimum required bars for a strategy to initialize indicators safely.
+
+        Heuristics used:
+        - If strategy_class has attribute `min_data_required` use it.
+        - If strategy_params contains `exit_ma_period` or `ma_period` use max of those * 2.
+        - Fallback to conservative default of 50 bars.
+        """
+        try:
+            # 1. Class-level hint
+            if hasattr(strategy_class, 'min_data_required'):
+                val = getattr(strategy_class, 'min_data_required')
+                if isinstance(val, int) and val > 0:
+                    return val
+
+            # 2. Strategy params based heuristics
+            params = strategy_params or {}
+
+            # Special case: multi-MA exit uses 20/30/60
+            if params.get('use_min_ma_exit'):
+                return 60 * 2  # twice the longest MA for safety
+
+            candidates = []
+            for key in ('exit_ma_period', 'ma_period', 'short_ma', 'long_ma'):
+                v = params.get(key)
+                if isinstance(v, int) and v > 0:
+                    candidates.append(v)
+
+            if candidates:
+                # take twice the largest moving average period as safe
+                return max(candidates) * 2
+
+            # 3. Fallback default
+            return 50
+        except Exception:
+            return 50
+
+    def _coerce_params(self, strategy_class: type, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert stringified numeric params to correct types using strategy_class.params defaults."""
+        coerced = params.copy()
+
+        raw_defaults = getattr(strategy_class, 'params', None)
+        defaults = {}
+
+        # Extract defaults from tuple/list of pairs or dict-like structures
+        if isinstance(raw_defaults, (list, tuple)):
+            for item in raw_defaults:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    name, default = item[0], item[1]
+                    defaults[name] = default
+        elif isinstance(raw_defaults, dict):
+            defaults = dict(raw_defaults)
+        else:
+            # Unknown structure (e.g., a type), skip default-based coercion
+            defaults = {}
+
+        # First pass: use defaults to guide casting
+        for key, default in defaults.items():
+            if key not in coerced:
+                continue
+            val = coerced[key]
+
+            # Skip None or already proper type
+            if val is None:
+                continue
+
+            # If value is string, try to cast based on default's type
+            if isinstance(val, str):
+                target_type = type(default)
+                try:
+                    if target_type is bool:
+                        coerced[key] = val.lower() in ('1', 'true', 'yes', 'y', 't')
+                    elif target_type is int:
+                        coerced[key] = int(float(val))
+                    elif target_type is float:
+                        coerced[key] = float(val)
+                    else:
+                        # Fallback: try float then int
+                        coerced[key] = float(val)
+                except Exception:
+                    # leave as-is if conversion fails
+                    pass
+            else:
+                # If default is int but value is float like 0.0, cast to int
+                if isinstance(default, int) and isinstance(val, float):
+                    coerced[key] = int(val)
+
+        # Second pass: generic numeric coercion for any remaining string values
+        for key, val in list(coerced.items()):
+            if not isinstance(val, str):
+                continue
+            v = val.strip()
+            if v == '':
+                continue
+            # Bool strings
+            low = v.lower()
+            if low in ('true', 'false'):
+                coerced[key] = (low == 'true')
+                continue
+            # Numeric strings
+            try:
+                as_float = float(v)
+                if as_float.is_integer():
+                    coerced[key] = int(as_float)
+                else:
+                    coerced[key] = as_float
+            except Exception:
+                # non-numeric, leave as-is
+                pass
+
+        return coerced
     
     def _collect_results(self, cerebro, strategy, symbol, start_date, end_date, initial_cash) -> Dict[str, Any]:
         """Collect backtest results from Backtrader in API-compatible format.
