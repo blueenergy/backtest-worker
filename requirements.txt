@@ -1,6 +1,6 @@
 requests>=2.28.0
-stock-data-access @ file://../data-access-lib
-quant-strategies @ file://../quant-strategies
+-e ../data-access-lib
+-e ../quant-strategies
 backtrader>=1.9.75.123
 pandas>=2.0
 pymongo>=4.0.0
