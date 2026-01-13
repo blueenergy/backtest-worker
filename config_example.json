@@ -1,6 +1,6 @@
 {
-  "api_base_url": "http://180.184.30.225:3001/api",
-  "api_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJzaHV5b2xpbiIsImV4cCI6MTc5ODk4MzEzMX0.BE-A8yQd9T4vQ-txmmpXzl7DmqmvpJct8ieUoYjR0C4",
+  "api_base_url": "http://180.184.30.225/api",
+  "api_token": "Your API token",
   "worker_id": "backtest_worker_001",
   "poll_interval": 5.0,
   "log_level": "INFO",
@@ -18,10 +18,6 @@
     "stock_access": {
       "enabled": true,
       "minute": false
-    },
-    "tushare": {
-      "enabled": false,
-      "token": "your_tushare_token_here"
     },
     "csv": {
       "enabled": false,

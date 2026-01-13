@@ -1,0 +1,16 @@
+# /etc/systemd/system/backtest-worker.service
+[Unit]
+Description=Backtest Worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/shuyolin/own/backtest-worker-remote
+ExecStart=/home/shuyolin/own/backtest-worker-remote/backtest.sh /home/shuyolin/own/backtest-worker-remote/config.json
+EnvironmentFile=/home/shuyolin/own/backtest-worker-remote/.env   # 如无可删
+Restart=on-failure
+RestartSec=5
+# 如需指定 Python 路径或虚拟环境，使用 ExecStartPre/Path 或直接调用 venv 里的 python
+
+[Install]
+WantedBy=multi-user.target
