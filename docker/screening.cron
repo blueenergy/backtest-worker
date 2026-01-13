@@ -1,0 +1,2 @@
+# Run screening each weekday at 16:30 local time
+30 16 * * 1-5 cd /app/backtest-worker && ./screening.sh all >> /var/log/screening.log 2>&1

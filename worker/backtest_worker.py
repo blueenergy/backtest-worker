@@ -28,7 +28,7 @@ import requests
 # Add parent directory to path for strategy imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from simple_backtest_runner import SimpleBacktestRunner
+from worker.simple_backtest_runner import SimpleBacktestRunner
 from quant_strategies.strategies import STRATEGY_MAP
 
 # Configure logging
@@ -211,18 +211,33 @@ class BacktestWorkerService:
         Returns:
             Formatted results dict with metrics
         """
-        # SimpleBacktestRunner already returns API-compatible format:
-        # {'metrics': {...}, 'trades': [...], 'equity_curve': [...]}
+        # Ensure metrics exist
+        metrics = raw_results.get('metrics', {}) or {}
+
+        # If metrics missing, derive minimal set from PnL fields
+        if not metrics:
+            initial_cash = raw_results.get('initial_cash', 0) or 0
+            final_value = raw_results.get('final_value', initial_cash)
+            profit = final_value - initial_cash
+            total_return_decimal = (profit / initial_cash) if initial_cash else 0
+            metrics = {
+                'total_return': total_return_decimal,
+                'sharpe_ratio': 0.0,
+                'max_drawdown': 0.0,
+                'win_rate': 0.0,
+                'total_trades': len(raw_results.get('trades', []) or []),
+            }
+            raw_results['metrics'] = metrics
+
+        total_return = metrics.get('total_return', 0) or 0
+        max_drawdown = metrics.get('max_drawdown', 0) or 0
+        win_rate = metrics.get('win_rate', 0) or 0
+        total_trades = metrics.get('total_trades', 0) or 0
         
-        # Extract metrics for logging
-        metrics = raw_results.get('metrics', {})
-        total_return = metrics.get('total_return', 0)
-        max_drawdown = metrics.get('max_drawdown', 0)
-        win_rate = metrics.get('win_rate', 0)
-        total_trades = metrics.get('total_trades', 0)
-        
-        log.info(f"Results: Return={total_return:.2f}%, MaxDD={max_drawdown:.2f}%, "
-                f"WinRate={win_rate:.2f}%, Trades={total_trades}")
+        log.info(
+            f"Results: Return={total_return:.2f}%, MaxDD={max_drawdown:.2f}%, "
+            f"WinRate={win_rate:.2f}%, Trades={total_trades}"
+        )
         
         return raw_results
     

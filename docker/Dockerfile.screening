@@ -1,0 +1,31 @@
+# Screening image with cron-based schedule
+FROM docker-registry-remote.artifactory-espoo1.int.net.nokia.com/python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai
+
+WORKDIR /app
+
+RUN apt-get update \ 
+    && apt-get install -y --no-install-recommends cron tzdata build-essential python3-dev \ 
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \ 
+    && echo $TZ > /etc/timezone \ 
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backtest-worker/ ./backtest-worker/
+COPY data-access-lib/ ./data-access-lib/
+COPY quant-strategies/ ./quant-strategies/
+
+WORKDIR /app/backtest-worker
+RUN pip install --no-cache-dir -e /app/data-access-lib -e /app/quant-strategies -r requirements.txt
+RUN chmod +x screening.sh
+
+ENV PYTHONPATH="/app/backtest-worker:/app/data-access-lib/src:/app/quant-strategies"
+
+COPY backtest-worker/docker/screening.cron /etc/cron.d/screening
+RUN chmod 0644 /etc/cron.d/screening && crontab /etc/cron.d/screening
+
+RUN touch /var/log/screening.log
+
+CMD ["cron", "-f"]

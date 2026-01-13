@@ -1,0 +1,38 @@
+# Backtest worker image
+FROM docker-registry-remote.artifactory-espoo1.int.net.nokia.com/python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Optional: switch apt mirror and drop other lists to avoid deb.debian.org
+RUN rm -f /etc/apt/sources.list.d/*.list \
+    && printf "deb http://mirrors.aliyun.com/debian bookworm main contrib non-free non-free-firmware\n" \
+             "deb http://mirrors.aliyun.com/debian bookworm-updates main contrib non-free non-free-firmware\n" \
+             "deb http://mirrors.aliyun.com/debian-security bookworm-security main contrib non-free non-free-firmware\n" > /etc/apt/sources.list
+# Build deps for pandas/backtrader (with retries/timeouts)
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        python3-dev \
+        curl \
+        iputils-ping \
+        netcat-traditional \
+    && rm -rf /var/lib/apt/lists/*
+
+# Project sources (keep relative paths intact for -e installs)
+COPY backtest-worker/ ./backtest-worker/
+COPY data-access-lib/ ./data-access-lib/
+COPY quant-strategies/ ./quant-strategies/
+
+# Python deps (install from project root with absolute editable paths)
+WORKDIR /app/backtest-worker
+RUN pip install --no-cache-dir -e /app/data-access-lib -e /app/quant-strategies -r requirements.txt
+
+RUN chmod +x backtest.sh
+
+ENV PYTHONPATH="/app/backtest-worker:/app/data-access-lib/src:/app/quant-strategies"
+
+ENTRYPOINT ["./backtest.sh"]
+CMD ["config.json"]
