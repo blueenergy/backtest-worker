@@ -27,6 +27,8 @@ import requests
 
 # Add parent directory to path for strategy imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from dotenv import load_dotenv
+load_dotenv()
 
 from simple_backtest_runner import SimpleBacktestRunner
 from quant_strategies.strategies import STRATEGY_MAP
@@ -37,7 +39,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 log = logging.getLogger(__name__)
-
 
 class BacktestWorkerService:
     """Service that polls for backtest tasks and executes them."""
