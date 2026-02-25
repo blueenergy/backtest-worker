@@ -22,4 +22,14 @@ if [ -n "$POLL_INTERVAL" ]; then ARGS="$ARGS --poll-interval $POLL_INTERVAL"; fi
 if [ -n "$LOG_LEVEL" ];    then ARGS="$ARGS --log-level $LOG_LEVEL"; fi
 
 echo "Starting backtest worker..."
+
+# Optionally start the screening scheduler in the background
+if [ "${ENABLE_SCREENING:-true}" = "true" ]; then
+    echo "Starting screening scheduler (mode=${SCREENING_MODE:-conservative})..."
+    python /app/screening_scheduler.py &
+    SCREENING_PID=$!
+    echo "Screening scheduler PID: $SCREENING_PID"
+fi
+
 exec python backtest_worker.py $ARGS
+
