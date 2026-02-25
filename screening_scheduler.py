@@ -27,6 +27,9 @@ logging.basicConfig(
 log = logging.getLogger("screening_scheduler")
 
 SCREENING_MODE = os.environ.get("SCREENING_MODE", "conservative")
+# Comma-separated strategy filter, e.g. "hidden_dragon,single_yang"
+# Leave empty to run all strategies in the selected mode
+SCREENING_STRATEGIES = os.environ.get("SCREENING_STRATEGIES", "")
 MANUAL_DAYS_BACK = os.environ.get("SCREENING_DAYS_BACK", "")
 MANUAL_RUN_AT = os.environ.get("SCREENING_RUN_AT", "")  # e.g. "18:30"
 
@@ -49,14 +52,36 @@ PRESETS = {
 }
 
 def get_tasks():
-    """Return list of (strategy_key, preset) tuples based on SCREENING_MODE."""
+    """Return list of (strategy_key, preset) tuples based on SCREENING_MODE.
+    
+    SCREENING_MODE accepts a single value or comma-separated list:
+      conservative, standard, aggressive, all
+    Example: SCREENING_MODE=conservative,standard
+    """
     mode = SCREENING_MODE
     if mode == "all":
         tasks = []
         for v in PRESETS.values():
             tasks.extend(v)
         return tasks
-    return PRESETS.get(mode, PRESETS["conservative"])
+    
+    tasks = []
+    seen = set()
+    for m in mode.split(","):
+        m = m.strip()
+        for item in PRESETS.get(m, []):
+            if item not in seen:
+                seen.add(item)
+                tasks.append(item)
+    tasks = tasks or PRESETS["conservative"]
+
+    # Filter by strategy type if SCREENING_STRATEGIES is specified
+    # e.g. SCREENING_STRATEGIES=hidden_dragon,single_yang
+    if SCREENING_STRATEGIES:
+        allowed = {s.strip() for s in SCREENING_STRATEGIES.split(",")}
+        tasks = [(sk, p) for sk, p in tasks if sk in allowed]
+
+    return tasks
 
 
 def get_schedule():
@@ -74,8 +99,7 @@ def get_schedule():
     if MANUAL_DAYS_BACK:
         days_back = int(MANUAL_DAYS_BACK)
     else:
-        now = datetime.now()
-        days_back = 360 if now.weekday() >= 5 else 60
+        days_back = 120  # default: 120-day window for all days
 
     return run_hour, run_minute, days_back
 
