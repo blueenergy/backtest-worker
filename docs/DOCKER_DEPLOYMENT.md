@@ -16,8 +16,8 @@
 ### 1. 在 `quantFinance/.env` 里配置必要变量
 
 ```env
-# 必填：用于 API 认证的 Bearer Token（用账号登录后从 localStorage 获取）
-BACKTEST_API_TOKEN=eyJhbGci...
+# 必填：backtest-worker 内部认证共享密钥，与 quant-api 的 BACKTEST_WORKER_TOKEN 保持一致
+BACKTEST_WORKER_TOKEN=replace-with-a-long-random-secret
 
 # 可选：API 地址（默认走宿主机 3001 端口）
 BACKTEST_API_BASE_URL=http://host.docker.internal:3001/api
@@ -53,7 +53,7 @@ docker exec backtest-worker env | grep SCREENING
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `BACKTEST_API_BASE_URL` | `http://quant-api:3001/api` | API 服务地址。若 quant-api 未接入网络，改为 `http://host.docker.internal:3001/api` |
-| `BACKTEST_API_TOKEN` | 无（必填） | JWT Bearer Token，通过登录界面获取 |
+| `BACKTEST_WORKER_TOKEN` | 无（必填） | backtest-worker 调用内部回测 API 的共享密钥，通过 `X-Backtest-Worker-Token` 发送 |
 | `BACKTEST_WORKER_ID` | `backtest_worker_<hostname>` | Worker 唯一标识，留空自动用容器 hostname |
 | `BACKTEST_POLL_INTERVAL` | `5` | 轮询任务间隔（秒） |
 

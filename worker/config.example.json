@@ -1,6 +1,6 @@
 {
   "api_base_url": "http://localhost:3001/api",
-  "api_token": "your_access_token_here",
+  "worker_token": "your_shared_backtest_worker_token_here",
   "worker_id": "backtest_worker_001",
   "poll_interval": 5.0,
   "log_level": "INFO",

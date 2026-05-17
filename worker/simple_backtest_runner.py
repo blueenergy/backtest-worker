@@ -30,12 +30,13 @@ class SimpleBacktestRunner:
         end_date: str = None,
         initial_cash: float = 1_000_000,
         preset_name: Optional[str] = None,
+        asset_type: str = "stock",
     ) -> Dict[str, Any]:
         """
         Run a backtest with given parameters.
         
         Args:
-            symbol: Stock symbol (e.g., '000858.SZ')
+            symbol: Trading symbol (e.g., '000858.SZ' or '510300.SH')
             strategy_class: Strategy class (subclass of BacktestStrategy)
             strategy_params: Strategy parameters dict
             start_date: Start date (YYYYMMDD)
@@ -46,7 +47,8 @@ class SimpleBacktestRunner:
         Returns:
             Dictionary with backtest results
         """
-        log.info(f"Starting backtest: {symbol} ({start_date} to {end_date})")
+        asset_type = (asset_type or "stock").lower()
+        log.info(f"Starting backtest: {symbol} ({asset_type}, {start_date} to {end_date})")
         log.info(f"Strategy: {strategy_class.__name__}")
         log.info(f"Strategy class type: {type(strategy_class)}")
         log.info(f"Strategy params attribute type: {type(getattr(strategy_class, 'params', None))}")
@@ -56,7 +58,7 @@ class SimpleBacktestRunner:
         try:
             # 1. Load data using data-access-lib
             log.info(f"Loading price data for {symbol}...")
-            df = self.data_loader.fetch_frame([symbol], start_date, end_date)
+            df = self._fetch_price_frame(symbol, start_date, end_date, asset_type)
             
             if df is None or df.empty:
                 raise ValueError(f"No data found for {symbol} ({start_date}-{end_date})")
@@ -122,7 +124,7 @@ class SimpleBacktestRunner:
             cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name="sharpe", riskfreerate=0.0)
             
             # 5. Create data feed from DataFrame
-            feed = self._create_data_feed(df, symbol)
+            feed = self._create_data_feed(df, symbol, asset_type=asset_type)
             cerebro.adddata(feed)
             
             # 6. Run backtest
@@ -137,6 +139,7 @@ class SimpleBacktestRunner:
             
             # 6. Collect results
             results = self._collect_results(cerebro, strategy, symbol, start_date, end_date, initial_cash)
+            results["asset_type"] = asset_type
             
             # Log completion with metrics
             final_value = cerebro.broker.getvalue()
@@ -147,7 +150,44 @@ class SimpleBacktestRunner:
             log.error(f"Backtest failed: {e}", exc_info=True)
             raise
     
-    def _create_data_feed(self, df, symbol):
+    def _fetch_price_frame(self, symbol: str, start_date: str, end_date: str, asset_type: str):
+        """Fetch OHLCV data for stocks or ETFs."""
+        if asset_type == "etf":
+            return self._fetch_etf_frame(symbol, start_date, end_date)
+        return self.data_loader.fetch_frame([symbol], start_date, end_date)
+
+    def _fetch_etf_frame(self, symbol: str, start_date: str, end_date: str):
+        """Fetch ETF daily bars from quant_data.etf_daily."""
+        import pandas as pd
+        from stock_data_access.mongo_context import get_db
+
+        db = get_db()
+        cursor = db["etf_daily"].find(
+            {
+                "ts_code": symbol,
+                "trade_date": {"$gte": start_date, "$lte": end_date},
+            },
+            {
+                "_id": 0,
+                "trade_date": 1,
+                "open": 1,
+                "high": 1,
+                "low": 1,
+                "close": 1,
+                "vol": 1,
+                "volume": 1,
+            },
+        ).sort("trade_date", 1)
+        docs = list(cursor)
+        if not docs:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(docs)
+        df["volume"] = df.get("volume", df.get("vol", 0))
+        df["trade_date"] = pd.to_datetime(df["trade_date"], format="mixed")
+        return df.set_index("trade_date").sort_index()[["open", "high", "low", "close", "volume"]]
+
+    def _create_data_feed(self, df, symbol, asset_type: str = "stock"):
         """Create a Backtrader PandasData feed from DataFrame."""
         import pandas as pd
         import backtrader as bt
@@ -182,17 +222,27 @@ class SimpleBacktestRunner:
         data.symbol = symbol
         data._name = symbol
         
-        # Try to get stock name from data-access-lib
+        # Try to get display name from the matching reference collection.
         try:
-            from stock_data_access import StockPriceDataAccess
-            loader = StockPriceDataAccess(minute=False)
-            name_map = loader.fetch_names([symbol])
-            stock_name = name_map.get(symbol, symbol)
+            stock_name = self._fetch_symbol_name(symbol, asset_type)
             data.stock_name = stock_name
         except Exception:
             data.stock_name = symbol
         
         return data
+
+    def _fetch_symbol_name(self, symbol: str, asset_type: str = "stock") -> str:
+        if asset_type == "etf":
+            from stock_data_access.mongo_context import get_db
+
+            doc = get_db()["etf_basic"].find_one({"ts_code": symbol}, {"_id": 0, "name": 1})
+            return (doc or {}).get("name") or symbol
+
+        from stock_data_access import StockPriceDataAccess
+
+        loader = StockPriceDataAccess(minute=False)
+        name_map = loader.fetch_names([symbol])
+        return name_map.get(symbol, symbol)
 
     def _estimate_required_bars(self, strategy_class: type, strategy_params: Optional[Dict[str, Any]] = None) -> int:
         """Estimate minimum required bars for a strategy to initialize indicators safely.

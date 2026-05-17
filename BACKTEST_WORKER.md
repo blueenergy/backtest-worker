@@ -171,7 +171,8 @@ All optimization scripts provide:
 | `--worker-id` | Worker unique identifier | `worker_YYYYMMDD_HHMMSS` |
 | `--poll-interval` | Polling interval (seconds) | `5` |
 | `--api-base` | API server address | `http://localhost:3001/api` |
-| `--token` | Authentication token (optional) | None |
+| `--worker-token` | Shared internal worker token (optional) | None |
+| `--token` | Deprecated alias for `--worker-token` | None |
 | `--log-level` | Logging level | `INFO` |
 | `--test` | Test configuration and exit | False |
 
@@ -310,8 +311,8 @@ curl http://localhost:3001/api/backtest/tasks/pending/poll
 ### Issue: Authentication failure
 
 ```bash
-# Use token parameter
-python worker/backtest_worker.py --token YOUR_ACCESS_TOKEN
+# Use worker token parameter
+python worker/backtest_worker.py --worker-token YOUR_BACKTEST_WORKER_TOKEN
 ```
 
 ### Issue: Missing dependencies

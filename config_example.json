@@ -1,6 +1,6 @@
 {
   "api_base_url": "http://180.184.30.225/api",
-  "api_token": "Your API token",
+  "worker_token": "Your shared BACKTEST_WORKER_TOKEN",
   "worker_id": "backtest_worker_001",
   "poll_interval": 5.0,
   "log_level": "INFO",

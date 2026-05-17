@@ -10,7 +10,7 @@ Usage:
     python backtest_worker.py --config config.json
     
     # Use command line arguments
-    python backtest_worker.py --worker-id WORKER_ID --token TOKEN
+    python backtest_worker.py --worker-id WORKER_ID --worker-token TOKEN
 """
 
 import sys
@@ -20,6 +20,7 @@ import argparse
 import logging
 import signal
 import statistics
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -48,7 +49,8 @@ class BacktestWorkerService:
         api_base: str = "http://localhost:3001/api",
         worker_id: Optional[str] = None,
         poll_interval: int = 5,
-        access_token: Optional[str] = None
+        access_token: Optional[str] = None,
+        worker_token: Optional[str] = None,
     ):
         """
         Initialize the backtest worker service.
@@ -57,12 +59,12 @@ class BacktestWorkerService:
             api_base: Base URL of the API server
             worker_id: Unique identifier for this worker
             poll_interval: Seconds to wait between polling
-            access_token: Authentication token for API requests
+            worker_token: Shared internal token for backtest-worker APIs
         """
         self.api_base = api_base.rstrip('/')
         self.worker_id = worker_id or f"worker_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.poll_interval = poll_interval
-        self.access_token = access_token
+        self.worker_token = worker_token or access_token
         self.running = False
         
         # Create runner instance
@@ -73,8 +75,8 @@ class BacktestWorkerService:
     def _get_headers(self) -> Dict[str, str]:
         """Get HTTP headers for API requests."""
         headers = {'Content-Type': 'application/json'}
-        if self.access_token:
-            headers['Authorization'] = f'Bearer {self.access_token}'
+        if self.worker_token:
+            headers['X-Backtest-Worker-Token'] = self.worker_token
         return headers
     
     def poll_tasks(self) -> Optional[Dict[str, Any]]:
@@ -162,14 +164,17 @@ class BacktestWorkerService:
         """
         task_id = task['task_id']
         symbol = task['symbol']
+        asset_type = (task.get('asset_type') or 'stock').lower()
         strategy_key = task['strategy_key']
         start_date = task['start_date']
         end_date = task['end_date']
         strategy_params = task.get('strategy_params', {})
+        preset_name = task.get('preset')
         initial_cash = task.get('initial_cash', 1000000)
         
-        log.info(f"Executing backtest for {symbol} ({start_date} to {end_date})")
+        log.info(f"Executing backtest for {symbol} ({asset_type}, {start_date} to {end_date})")
         log.info(f"Strategy: {strategy_key}, Params: {strategy_params}")
+        log.info(f"Preset: {preset_name}")
         log.info(f"Initial cash: {initial_cash}")
         
         try:
@@ -188,7 +193,9 @@ class BacktestWorkerService:
                 strategy_params=strategy_params,
                 start_date=start_date,
                 end_date=end_date,
-                initial_cash=initial_cash
+                initial_cash=initial_cash,
+                preset_name=preset_name,
+                asset_type=asset_type,
             )
             log.info("Backtest execution completed")
             
@@ -401,7 +408,7 @@ Examples:
   python backtest_worker.py --config config.json --worker-id my_worker
   
   # Use only command line arguments (not recommended)
-  python backtest_worker.py --api-base http://localhost:3001/api --token YOUR_TOKEN
+  python backtest_worker.py --api-base http://localhost:3001/api --worker-token YOUR_TOKEN
         """
     )
     parser.add_argument(
@@ -423,7 +430,11 @@ Examples:
     )
     parser.add_argument(
         '--token',
-        help='Access token for API authentication (overrides config)'
+        help='Deprecated alias for --worker-token'
+    )
+    parser.add_argument(
+        '--worker-token',
+        help='Shared worker token for backtest API authentication (overrides config)'
     )
     parser.add_argument(
         '--log-level',
@@ -450,17 +461,23 @@ Examples:
     api_base = args.api_base or config.get('api_base_url', 'http://localhost:3001/api')
     worker_id = args.worker_id or config.get('worker_id')
     poll_interval = args.poll_interval or config.get('poll_interval', 5.0)
-    access_token = args.token or config.get('api_token')
+    worker_token = (
+        args.worker_token
+        or args.token
+        or os.getenv("BACKTEST_WORKER_TOKEN")
+        or os.getenv("API_TOKEN")
+        or config.get('worker_token')
+        or config.get('api_token')
+    )
     log_level = args.log_level or config.get('log_level', 'INFO')
     
     # Update log level
     logging.getLogger().setLevel(getattr(logging, log_level))
     
     # Validate required parameters
-    if not access_token:
-        log.error("Access token is required!")
-        log.info("Please provide token via --token argument or in config.json")
-        log.info("Get your token from: User Profile -> API Token Management")
+    if not worker_token:
+        log.error("Backtest worker token is required!")
+        log.info("Please provide worker_token in config.json or BACKTEST_WORKER_TOKEN in environment")
         sys.exit(1)
     
     # Create worker service
@@ -468,7 +485,7 @@ Examples:
         api_base=api_base,
         worker_id=worker_id,
         poll_interval=poll_interval,
-        access_token=access_token
+        worker_token=worker_token,
     )
     
     # Test mode: verify configuration and connection, then exit
@@ -479,7 +496,7 @@ Examples:
         log.info(f"API Base: {api_base}")
         log.info(f"Worker ID: {worker_id or '(auto-generated)'}")
         log.info(f"Poll Interval: {poll_interval}s")
-        log.info(f"Token: {'*' * 20}...{access_token[-10:] if len(access_token) > 10 else '***'}")
+        log.info(f"Worker token: {'*' * 20}...{worker_token[-10:] if len(worker_token) > 10 else '***'}")
         log.info("")
         
         # Test API connection
@@ -487,7 +504,7 @@ Examples:
         try:
             response = requests.get(
                 f"{api_base}/backtest/tasks/pending/poll",
-                headers={'Authorization': f'Bearer {access_token}'},
+                headers={'X-Backtest-Worker-Token': worker_token},
                 timeout=10
             )
             log.info(f"Received response: {response.status_code}")
@@ -511,7 +528,7 @@ Examples:
                     log.info("✅ No pending tasks (this is OK)")
             elif response.status_code == 403:
                 log.error("❌ Authentication failed - invalid token")
-                log.info("Please check your api_token in config.json")
+                log.info("Please check BACKTEST_WORKER_TOKEN / worker_token")
                 sys.exit(1)
             else:
                 log.warning(f"⚠️  Unexpected response: {response.status_code}")

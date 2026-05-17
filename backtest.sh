@@ -20,7 +20,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo ""
     echo "Please create config file:"
     echo "  cp config.example.json config.json"
-    echo "  vim config.json  # Fill in your api_token"
+    echo "  vim config.json  # Fill in your worker_token"
     exit 1
 fi
 

@@ -97,7 +97,7 @@ def test_config_loading():
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         config_data = {
             "api_base_url": "http://test-server:3001/api",
-            "api_token": "test_token_123",
+            "worker_token": "test_token_123",
             "worker_id": "test_worker_01",
             "poll_interval": 10,
             "log_level": "DEBUG"
@@ -109,7 +109,7 @@ def test_config_loading():
         # Test config loading
         config = load_config(config_path)
         assert config['api_base_url'] == "http://test-server:3001/api"
-        assert config['api_token'] == "test_token_123"
+        assert config['worker_token'] == "test_token_123"
         assert config['worker_id'] == "test_worker_01"
         assert config['poll_interval'] == 10
         assert config['log_level'] == "DEBUG"

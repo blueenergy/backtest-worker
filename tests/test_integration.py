@@ -162,12 +162,12 @@ def test_worker_authentication_headers():
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token_123"
+        worker_token="test_token_123"
     )
     
     headers = worker._get_headers()
-    assert 'Authorization' in headers
-    assert headers['Authorization'] == 'Bearer test_token_123'
+    assert 'X-Backtest-Worker-Token' in headers
+    assert headers['X-Backtest-Worker-Token'] == 'test_token_123'
     assert headers['Content-Type'] == 'application/json'
     print("✅ Authentication headers set correctly")
 

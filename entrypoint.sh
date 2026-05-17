@@ -17,7 +17,8 @@ WORKER_ID="${WORKER_ID:-backtest_worker_$(hostname)}"
 ARGS=""
 if [ -n "$API_BASE_URL" ]; then ARGS="$ARGS --api-base $API_BASE_URL"; fi
 if [ -n "$WORKER_ID" ];    then ARGS="$ARGS --worker-id $WORKER_ID"; fi
-if [ -n "$API_TOKEN" ];    then ARGS="$ARGS --token $API_TOKEN"; fi
+if [ -n "$BACKTEST_WORKER_TOKEN" ]; then ARGS="$ARGS --worker-token $BACKTEST_WORKER_TOKEN"; fi
+if [ -z "$BACKTEST_WORKER_TOKEN" ] && [ -n "$API_TOKEN" ]; then ARGS="$ARGS --worker-token $API_TOKEN"; fi
 if [ -n "$POLL_INTERVAL" ]; then ARGS="$ARGS --poll-interval $POLL_INTERVAL"; fi
 if [ -n "$LOG_LEVEL" ];    then ARGS="$ARGS --log-level $LOG_LEVEL"; fi
 

@@ -81,6 +81,39 @@ class TestSimpleBacktestRunner(unittest.TestCase):
         # Verify data feed properties
         self.assertEqual(data_feed.symbol, 'TEST.SZ')
         self.assertEqual(data_feed._name, 'TEST.SZ')
+
+    @patch('stock_data_access.mongo_context.get_db')
+    def test_fetch_etf_frame(self, mock_get_db):
+        """Test ETF daily bars are loaded from etf_daily."""
+        class FakeCursor(list):
+            def sort(self, *_args, **_kwargs):
+                return self
+
+        class FakeCollection:
+            def find(self, query, projection):
+                self.query = query
+                self.projection = projection
+                return FakeCursor([
+                    {
+                        "ts_code": "510300.SH",
+                        "trade_date": "20240102",
+                        "open": 3.5,
+                        "high": 3.6,
+                        "low": 3.4,
+                        "close": 3.55,
+                        "vol": 100000,
+                    }
+                ])
+
+        fake_etf_daily = FakeCollection()
+        mock_get_db.return_value = {"etf_daily": fake_etf_daily}
+
+        df = self.runner._fetch_etf_frame("510300.SH", "20240101", "20240131")
+
+        self.assertFalse(df.empty)
+        self.assertEqual(list(df.columns), ["open", "high", "low", "close", "volume"])
+        self.assertEqual(df.iloc[0]["volume"], 100000)
+        self.assertEqual(fake_etf_daily.query["ts_code"], "510300.SH")
     
     def test_collect_results(self):
         """Test results collection."""
