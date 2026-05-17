@@ -28,17 +28,28 @@ jobs:
         with:
           path: backtest-worker
 
+      - name: Validate dependency repo token
+        env:
+          DEPENDENCY_REPO_TOKEN: ${{ secrets.DEPENDENCY_REPO_TOKEN }}
+        run: |
+          if [ -z "$DEPENDENCY_REPO_TOKEN" ]; then
+            echo "DEPENDENCY_REPO_TOKEN is required to checkout private dependency repositories."
+            exit 1
+          fi
+
       - name: Checkout data-access-lib
         uses: actions/checkout@v4
         with:
           repository: blueenergy/data-access-lib
           path: data-access-lib
+          token: ${{ secrets.DEPENDENCY_REPO_TOKEN }}
 
       - name: Checkout quant-strategies
         uses: actions/checkout@v4
         with:
           repository: blueenergy/quant-strategies
           path: quant-strategies
+          token: ${{ secrets.DEPENDENCY_REPO_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -75,6 +86,9 @@ jobs:
             tests/test_integration.py::test_worker_authentication_headers \
             tests/test_simple_backtest_runner.py::TestSimpleBacktestRunner::test_fetch_etf_frame
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Docker build smoke test
         uses: docker/build-push-action@v6
         with:
@@ -96,17 +110,28 @@ jobs:
         with:
           path: backtest-worker
 
+      - name: Validate dependency repo token
+        env:
+          DEPENDENCY_REPO_TOKEN: ${{ secrets.DEPENDENCY_REPO_TOKEN }}
+        run: |
+          if [ -z "$DEPENDENCY_REPO_TOKEN" ]; then
+            echo "DEPENDENCY_REPO_TOKEN is required to checkout private dependency repositories."
+            exit 1
+          fi
+
       - name: Checkout data-access-lib
         uses: actions/checkout@v4
         with:
           repository: blueenergy/data-access-lib
           path: data-access-lib
+          token: ${{ secrets.DEPENDENCY_REPO_TOKEN }}
 
       - name: Checkout quant-strategies
         uses: actions/checkout@v4
         with:
           repository: blueenergy/quant-strategies
           path: quant-strategies
+          token: ${{ secrets.DEPENDENCY_REPO_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
