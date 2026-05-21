@@ -66,6 +66,7 @@ docker exec backtest-worker env | grep SCREENING
 | `SCREENING_STRATEGIES` | 全部 | 筛选策略类型，逗号分隔。可选：`turtle`, `single_yang`, `hidden_dragon` |
 | `SCREENING_DAYS_BACK` | `120` | 回测窗口天数（留空用默认 120 天） |
 | `SCREENING_UNIVERSE_INDEX` | 全市场 | 指数成分股股票池，来自 `index_constituents.index_code`，如 `csi1000` |
+| `SCREENING_RESULTS_DB_NAME` | `DB_NAME` 或 `finance` | 筛选结果写入的业务库；读取行情/指数成分仍使用 `MONGO_DB`/`quant_data` |
 | `SCREENING_RUN_AT` | 工作日 18:30，周末 08:00 | 自定义触发时间，格式 `HH:MM`（上海时区）|
 
 ---
@@ -81,6 +82,8 @@ docker exec backtest-worker env | grep SCREENING
 筛选结果写入 MongoDB：
 - `strategy_stock_pool`：当日符合买入信号的股票
 - `strategy_trade_history`：所有历史交易记录（含买卖）
+
+注意：行情、指数成分等外部数据从 `MONGO_DB` 指向的数据库读取（通常是 `quant_data`）；`strategy_stock_pool` 和 `strategy_trade_history` 是前端业务结果，写入 `SCREENING_RESULTS_DB_NAME` / `DB_NAME` 指向的业务库（通常是 `finance`）。
 
 ---
 

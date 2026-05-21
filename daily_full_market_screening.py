@@ -29,11 +29,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import List
 
 from stock_data_access import StockPriceDataAccess, get_trading_dates
-from stock_data_access.mongo_context import get_db
+from stock_data_access.mongo_context import get_db as get_data_db
 
 from worker.simple_backtest_runner import SimpleBacktestRunner
 from quant_strategies.strategies import STRATEGY_MAP
@@ -161,6 +162,16 @@ def _get_date_range(days_back: int) -> tuple[str, str]:
     return calendar_start, calendar_end
 
 
+def _get_results_db():
+    """Return the finance DB used by quantFinance for screening results."""
+    db_name = (
+        os.getenv("SCREENING_RESULTS_DB_NAME")
+        or os.getenv("DB_NAME")
+        or "finance"
+    )
+    return get_data_db(db_name=db_name)
+
+
 def _load_index_universe_symbols(db, index_code: str) -> List[str]:
     """Load latest index constituent symbols from index_constituents."""
     normalized = index_code.strip()
@@ -255,10 +266,10 @@ def main() -> None:
 
     # 1) Load universe symbols via data-access-lib
     loader = StockPriceDataAccess(minute=False)
-    db = get_db()
+    data_db = get_data_db()
     symbols = _load_universe_symbols(
         loader,
-        db,
+        data_db,
         limit=limit_symbols,
         index_code=universe_index,
     )
@@ -279,7 +290,8 @@ def main() -> None:
 
     # 2) Prepare backtest runner and Mongo collection
     runner = SimpleBacktestRunner()
-    pool_coll = db["strategy_stock_pool"]
+    results_db = _get_results_db()
+    pool_coll = results_db["strategy_stock_pool"]
 
     total = 0
     candidates = 0
@@ -396,7 +408,7 @@ def main() -> None:
             
             if not dry_run:
                 # Save to trade history collection
-                trade_history_coll = db["strategy_trade_history"]
+                trade_history_coll = results_db["strategy_trade_history"]
                 trade_history_coll.update_one(
                     {"date": date_part, "strategy": strategy_key, "preset": preset_name or "default", 
                      "symbol": sym, "datetime": dt_str},
