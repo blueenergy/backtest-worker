@@ -9,6 +9,7 @@ Schedule logic (matches screening.sh):
 Environment variables (all optional):
   SCREENING_MODE       : conservative | standard | aggressive | all (default: conservative)
   SCREENING_DAYS_BACK  : override the auto window (e.g. 360)
+  SCREENING_UNIVERSE_INDEX : optional index_constituents.index_code (e.g. csi1000)
   SCREENING_RUN_AT     : HH:MM in local time to trigger (default: auto by weekday)
   TZ                   : should be set to Asia/Shanghai in docker-compose
 """
@@ -31,6 +32,7 @@ SCREENING_MODE = os.environ.get("SCREENING_MODE", "conservative")
 # Leave empty to run all strategies in the selected mode
 SCREENING_STRATEGIES = os.environ.get("SCREENING_STRATEGIES", "")
 MANUAL_DAYS_BACK = os.environ.get("SCREENING_DAYS_BACK", "")
+SCREENING_UNIVERSE_INDEX = os.environ.get("SCREENING_UNIVERSE_INDEX", "").strip()
 MANUAL_RUN_AT = os.environ.get("SCREENING_RUN_AT", "")  # e.g. "18:30"
 
 PRESETS = {
@@ -107,23 +109,33 @@ def get_schedule():
 def run_screening(days_back: int):
     """Run all configured screening presets sequentially."""
     tasks = get_tasks()
-    log.info("Starting screening | mode=%s days_back=%d tasks=%d", SCREENING_MODE, days_back, len(tasks))
+    log.info(
+        "Starting screening | mode=%s days_back=%d universe_index=%s tasks=%d",
+        SCREENING_MODE,
+        days_back,
+        SCREENING_UNIVERSE_INDEX or "all",
+        len(tasks),
+    )
 
     for strategy_key, preset in tasks:
         log.info("Running: strategy=%s preset=%s", strategy_key, preset)
+        cmd = [
+            sys.executable,
+            "daily_full_market_screening.py",
+            "--strategy-key", strategy_key,
+            "--preset", preset,
+            "--days-back", str(days_back),
+            "--initial-cash", "1000000",
+            "--min-win-rate", "0.50",
+            "--min-trades", "3",
+            "--min-return", "0.03",
+            "--log-level", "INFO",
+        ]
+        if SCREENING_UNIVERSE_INDEX:
+            cmd.extend(["--universe-index", SCREENING_UNIVERSE_INDEX])
+
         result = subprocess.run(
-            [
-                sys.executable,
-                "daily_full_market_screening.py",
-                "--strategy-key", strategy_key,
-                "--preset", preset,
-                "--days-back", str(days_back),
-                "--initial-cash", "1000000",
-                "--min-win-rate", "0.50",
-                "--min-trades", "3",
-                "--min-return", "0.03",
-                "--log-level", "INFO",
-            ],
+            cmd,
             cwd=os.path.dirname(os.path.abspath(__file__)),
         )
         if result.returncode != 0:

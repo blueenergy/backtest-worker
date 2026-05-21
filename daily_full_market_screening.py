@@ -81,6 +81,13 @@ def _parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--universe-index",
+        default="",
+        type=str,
+        help="Optional index universe from Mongo index_constituents, e.g. csi1000.",
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Run screening but do NOT write to Mongo; only log candidates.",
@@ -154,14 +161,58 @@ def _get_date_range(days_back: int) -> tuple[str, str]:
     return calendar_start, calendar_end
 
 
-def _load_universe_symbols(loader: StockPriceDataAccess, limit: int = 0) -> List[str]:
+def _load_index_universe_symbols(db, index_code: str) -> List[str]:
+    """Load latest index constituent symbols from index_constituents."""
+    normalized = index_code.strip()
+    if not normalized:
+        return []
+
+    coll = db["index_constituents"]
+    latest = coll.find_one(
+        {"index_code": normalized},
+        {"_id": 0, "weight_trade_date": 1, "update_date": 1},
+        sort=[("weight_trade_date", -1), ("update_date", -1)],
+    )
+    if not latest:
+        return []
+
+    query = {"index_code": normalized}
+    if latest.get("weight_trade_date"):
+        query["weight_trade_date"] = latest["weight_trade_date"]
+    if latest.get("update_date"):
+        query["update_date"] = latest["update_date"]
+
+    seen = set()
+    symbols = []
+    for d in coll.find(query, {"_id": 0, "symbol": 1}).sort("symbol", 1):
+        symbol = d.get("symbol")
+        if not isinstance(symbol, str):
+            continue
+        symbol = symbol.strip()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        symbols.append(symbol)
+    return symbols
+
+
+def _load_universe_symbols(
+    loader: StockPriceDataAccess,
+    db,
+    limit: int = 0,
+    index_code: str = "",
+) -> List[str]:
     """Load full symbol universe from stock_info.
 
     Uses `stock_info.symbol` as the canonical symbol (with suffix).
     """
-    info_coll = loader.info_coll
-    symbols = [s for s in info_coll.distinct("symbol") if isinstance(s, str) and s.strip()]
-    symbols.sort()
+    if index_code:
+        symbols = _load_index_universe_symbols(db, index_code)
+    else:
+        info_coll = loader.info_coll
+        symbols = [s for s in info_coll.distinct("symbol") if isinstance(s, str) and s.strip()]
+        symbols.sort()
+
     if limit and limit > 0:
         return symbols[:limit]
     return symbols
@@ -177,6 +228,7 @@ def main() -> None:
     days_back: int = args.days_back
     initial_cash: float = args.initial_cash
     limit_symbols: int = args.limit_symbols
+    universe_index: str = args.universe_index.strip()
     dry_run: bool = args.dry_run
 
     if strategy_key not in STRATEGY_MAP:
@@ -203,17 +255,30 @@ def main() -> None:
 
     # 1) Load universe symbols via data-access-lib
     loader = StockPriceDataAccess(minute=False)
-    symbols = _load_universe_symbols(loader, limit=limit_symbols)
+    db = get_db()
+    symbols = _load_universe_symbols(
+        loader,
+        db,
+        limit=limit_symbols,
+        index_code=universe_index,
+    )
     if not symbols:
-        log.error("No symbols found in stock_info; aborting.")
+        if universe_index:
+            log.error("No symbols found in index_constituents for index_code=%s; aborting.", universe_index)
+        else:
+            log.error("No symbols found in stock_info; aborting.")
         return
 
-    log.info("Universe size: %d symbols%s",
-             len(symbols), " (limited)" if limit_symbols and limit_symbols > 0 else "")
+    universe_label = f"index={universe_index}" if universe_index else "all stocks"
+    log.info(
+        "Universe size: %d symbols | %s%s",
+        len(symbols),
+        universe_label,
+        " (limited)" if limit_symbols and limit_symbols > 0 else "",
+    )
 
     # 2) Prepare backtest runner and Mongo collection
     runner = SimpleBacktestRunner()
-    db = get_db()
     pool_coll = db["strategy_stock_pool"]
 
     total = 0

@@ -65,6 +65,7 @@ docker exec backtest-worker env | grep SCREENING
 | `SCREENING_MODE` | `conservative` | 筛选策略组合。可选：`conservative`, `standard`, `aggressive`, `all`，支持逗号分隔如 `conservative,standard` |
 | `SCREENING_STRATEGIES` | 全部 | 筛选策略类型，逗号分隔。可选：`turtle`, `single_yang`, `hidden_dragon` |
 | `SCREENING_DAYS_BACK` | `120` | 回测窗口天数（留空用默认 120 天） |
+| `SCREENING_UNIVERSE_INDEX` | 全市场 | 指数成分股股票池，来自 `index_constituents.index_code`，如 `csi1000` |
 | `SCREENING_RUN_AT` | 工作日 18:30，周末 08:00 | 自定义触发时间，格式 `HH:MM`（上海时区）|
 
 ---
