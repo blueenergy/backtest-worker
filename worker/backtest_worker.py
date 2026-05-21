@@ -41,6 +41,23 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+
+def _normalize_task_date(value: Any) -> str:
+    """Return YYYYMMDD for API task dates, or empty string when missing."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    return text[:10].replace("-", "")
+
+
+def _validate_task_dates(start_date: str, end_date: str) -> None:
+    if len(start_date) != 8 or not start_date.isdigit():
+        raise ValueError(f"Invalid or missing start_date: {start_date or '<empty>'}")
+    if len(end_date) != 8 or not end_date.isdigit():
+        raise ValueError(f"Invalid or missing end_date: {end_date or '<empty>'}")
+
 class BacktestWorkerService:
     """Service that polls for backtest tasks and executes them."""
     
@@ -166,8 +183,8 @@ class BacktestWorkerService:
         symbol = task['symbol']
         asset_type = (task.get('asset_type') or 'stock').lower()
         strategy_key = task['strategy_key']
-        start_date = task['start_date']
-        end_date = task['end_date']
+        start_date = _normalize_task_date(task.get('start_date'))
+        end_date = _normalize_task_date(task.get('end_date'))
         strategy_params = task.get('strategy_params', {})
         preset_name = task.get('preset')
         initial_cash = task.get('initial_cash', 1000000)
@@ -178,6 +195,8 @@ class BacktestWorkerService:
         log.info(f"Initial cash: {initial_cash}")
         
         try:
+            _validate_task_dates(start_date, end_date)
+
             # Get strategy class from STRATEGY_MAP
             if strategy_key not in STRATEGY_MAP:
                 raise ValueError(f"Unknown strategy: {strategy_key}. Available: {list(STRATEGY_MAP.keys())}")
