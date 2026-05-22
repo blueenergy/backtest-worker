@@ -145,6 +145,41 @@ class TestSimpleBacktestRunner(unittest.TestCase):
         self.assertEqual(results['final_value'], 110000.0)
         self.assertEqual(results['total_profit'], 10000.0)
 
+    def test_sanitize_params_drops_invalid_ai_combo_keys(self):
+        class FakeStrategy:
+            params = (
+                ("entry_ma_period", 60),
+                ("ma_proximity_pct", 0.01),
+            )
+
+        raw = {
+            "entry_ma_period": 20,
+            "entry_ma_period + ma_proximity_pct": 0.03,
+            "ma_proximity_pct": 0.02,
+        }
+        sanitized = self.runner._sanitize_params(FakeStrategy, raw)
+        self.assertEqual(
+            sanitized,
+            {"entry_ma_period": 20, "ma_proximity_pct": 0.02},
+        )
+
+    def test_sanitize_params_drops_batch_metadata_and_reads_backtrader_params(self):
+        try:
+            from backtest_worker import STRATEGY_MAP
+        except ImportError:
+            from worker.backtest_worker import STRATEGY_MAP
+
+        cls = STRATEGY_MAP.get("hidden_dragon")
+        self.assertTrue(self.runner._strategy_param_names(cls))
+
+        raw = {
+            "universe_value": "csi1000",
+            "universe_type": "index",
+            "entry_ma_period": 20,
+        }
+        sanitized = self.runner._sanitize_params(cls, raw)
+        self.assertEqual(sanitized, {"entry_ma_period": 20})
+
 
 if __name__ == '__main__':
     unittest.main()

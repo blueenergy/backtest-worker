@@ -7,8 +7,43 @@ This runner:
 """
 
 import logging
+import re
 import backtrader as bt
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
+
+_PARAM_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+# Batch/task metadata keys that must never be passed to Backtrader strategies.
+_RESERVED_NON_STRATEGY_KEYS = frozenset({
+    "universe_value",
+    "universe_type",
+    "symbols_count",
+    "limit_symbols",
+    "symbols_preview",
+    "batch_id",
+    "batch_name",
+    "batch_index",
+    "parent_batch_id",
+    "loop_id",
+    "asset_type",
+    "strategy_key",
+    "preset",
+    "name",
+    "symbols",
+    "start_date",
+    "end_date",
+    "initial_cash",
+    "symbol",
+    "task_id",
+    "user_id",
+    "stock_name",
+    "status",
+    "worker_id",
+    "created_at",
+    "started_at",
+    "completed_at",
+    "error_message",
+})
 
 from stock_data_access import StockPriceDataAccess
 
@@ -109,6 +144,7 @@ class SimpleBacktestRunner:
             
             # Coerce parameter types based on strategy defaults to avoid str vs int/float issues
             safe_params = self._coerce_params(strategy_class, safe_params)
+            safe_params = self._sanitize_params(strategy_class, safe_params)
 
             # Add worker_mode flag for backtest context
             safe_params['worker_mode'] = 'backtest'
@@ -280,6 +316,69 @@ class SimpleBacktestRunner:
             return 50
         except Exception:
             return 50
+
+    def _strategy_param_names(self, strategy_class: type) -> Set[str]:
+        """Collect declared Backtrader param names from the strategy class MRO."""
+        names: Set[str] = set()
+        for klass in strategy_class.__mro__:
+            raw_defaults = klass.__dict__.get("params")
+            if raw_defaults is None:
+                continue
+            if isinstance(raw_defaults, (list, tuple)):
+                for item in raw_defaults:
+                    if isinstance(item, (list, tuple)) and len(item) >= 1:
+                        names.add(str(item[0]))
+                continue
+            if isinstance(raw_defaults, dict):
+                names.update(str(k) for k in raw_defaults.keys())
+                continue
+            getkeys = getattr(raw_defaults, "_getkeys", None)
+            if callable(getkeys):
+                try:
+                    names.update(str(k) for k in getkeys())
+                except Exception:
+                    pass
+        return names
+
+    def _sanitize_params(self, strategy_class: type, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop invalid keys (e.g. AI combo labels, batch metadata) before passing kwargs."""
+        allowed = self._strategy_param_names(strategy_class)
+        sanitized: Dict[str, Any] = {}
+
+        for key, value in (params or {}).items():
+            if not isinstance(key, str):
+                continue
+            key = key.strip()
+            if not key or key in _RESERVED_NON_STRATEGY_KEYS:
+                log.warning(
+                    "Ignoring reserved/non-strategy param %r for %s",
+                    key,
+                    strategy_class.__name__,
+                )
+                continue
+            if allowed and key not in allowed:
+                if _PARAM_NAME_RE.match(key):
+                    log.warning(
+                        "Ignoring unknown strategy param %r for %s",
+                        key,
+                        strategy_class.__name__,
+                    )
+                else:
+                    log.warning(
+                        "Ignoring invalid strategy param key %r for %s",
+                        key,
+                        strategy_class.__name__,
+                    )
+                continue
+            if not allowed and not _PARAM_NAME_RE.match(key):
+                log.warning(
+                    "Ignoring invalid strategy param key %r for %s",
+                    key,
+                    strategy_class.__name__,
+                )
+                continue
+            sanitized[key] = value
+        return sanitized
 
     def _coerce_params(self, strategy_class: type, params: Dict[str, Any]) -> Dict[str, Any]:
         """Convert stringified numeric params to correct types using strategy_class.params defaults."""
