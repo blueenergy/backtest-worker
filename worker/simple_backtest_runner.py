@@ -45,6 +45,8 @@ _RESERVED_NON_STRATEGY_KEYS = frozenset({
     "error_message",
 })
 
+DEFAULT_ETF_TARGET_POSITION_PCT = 0.95
+
 from stock_data_access import StockPriceDataAccess
 
 log = logging.getLogger(__name__)
@@ -141,6 +143,11 @@ class SimpleBacktestRunner:
                     log.info(f"Loaded preset '{preset_name}' with params: {safe_params}")
                 except ImportError as e:
                     log.warning(f"Could not load preset '{preset_name}': {e}, using provided parameters")
+
+            # Old ETF tasks and loop reruns may not carry this newer Strategy Lab
+            # parameter. Add it before sanitizing; unsupported strategies drop it.
+            if asset_type == "etf":
+                safe_params.setdefault("target_position_pct", DEFAULT_ETF_TARGET_POSITION_PCT)
             
             # Coerce parameter types based on strategy defaults to avoid str vs int/float issues
             safe_params = self._coerce_params(strategy_class, safe_params)
@@ -471,6 +478,7 @@ class SimpleBacktestRunner:
         
         # Extract performance metrics from analyzers
         metrics = self._extract_metrics(strategy, profit_pct)
+        metrics.update(self._extract_invested_metrics(strategy, profit, initial_cash))
         
         # Extract and format trades for API
         trades = self._extract_api_trades(strategy)
@@ -554,6 +562,37 @@ class SimpleBacktestRunner:
             pass
         
         return metrics
+
+    def _extract_invested_metrics(self, strategy, total_profit: float, initial_cash: float) -> Dict[str, Any]:
+        """Calculate capital deployment metrics from the strategy trade log."""
+        trades_log = getattr(strategy, 'trades_log', []) or []
+        max_invested_cash = 0.0
+        gross_buy_value = 0.0
+
+        for trade in trades_log:
+            try:
+                action = str(trade.get('action', '')).lower()
+                price = float(trade.get('price', 0) or 0)
+                size = abs(float(trade.get('size', 0) or 0))
+                position_after = abs(float(trade.get('position_after', 0) or 0))
+                avg_cost = float(trade.get('avg_cost', 0) or 0)
+            except (TypeError, ValueError):
+                continue
+
+            if action == 'buy':
+                gross_buy_value += price * size
+            if position_after > 0 and avg_cost > 0:
+                max_invested_cash = max(max_invested_cash, position_after * avg_cost)
+
+        invested_cash = max(max_invested_cash, gross_buy_value if max_invested_cash <= 0 else 0.0)
+        invested_return = (total_profit / invested_cash) if invested_cash > 0 else None
+        capital_utilization = (invested_cash / initial_cash) if initial_cash > 0 and invested_cash > 0 else 0.0
+
+        return {
+            'invested_cash': invested_cash,
+            'invested_return': invested_return,
+            'capital_utilization': capital_utilization,
+        }
     
     def _extract_api_trades(self, strategy) -> list:
         """Extract trades in API format matching BacktestTrade schema.

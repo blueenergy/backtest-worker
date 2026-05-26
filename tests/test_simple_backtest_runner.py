@@ -123,7 +123,15 @@ class TestSimpleBacktestRunner(unittest.TestCase):
         mock_cerebro.broker.getvalue.return_value = 110000.0
         
         mock_strategy = Mock()
-        mock_strategy.trades_log = []
+        mock_strategy.trades_log = [
+            {
+                "action": "BUY",
+                "size": 900,
+                "price": 100.0,
+                "position_after": 900,
+                "avg_cost": 100.0,
+            }
+        ]
         mock_strategy.analyzers = Mock()
         mock_strategy.analyzers.getbyname.return_value = None
         mock_strategy.__class__ = Mock()
@@ -141,9 +149,12 @@ class TestSimpleBacktestRunner(unittest.TestCase):
         )
         
         # Verify results structure
-        self.assertEqual(results['symbol'], 'TEST.SZ')
-        self.assertEqual(results['final_value'], 110000.0)
-        self.assertEqual(results['total_profit'], 10000.0)
+        self.assertIn('metrics', results)
+        self.assertIn('trades', results)
+        self.assertIn('equity_curve', results)
+        self.assertEqual(results['metrics']['invested_cash'], 90000.0)
+        self.assertAlmostEqual(results['metrics']['invested_return'], 10000.0 / 90000.0)
+        self.assertEqual(results['metrics']['capital_utilization'], 0.9)
 
     def test_sanitize_params_drops_invalid_ai_combo_keys(self):
         class FakeStrategy:
@@ -179,6 +190,19 @@ class TestSimpleBacktestRunner(unittest.TestCase):
         }
         sanitized = self.runner._sanitize_params(cls, raw)
         self.assertEqual(sanitized, {"entry_ma_period": 20})
+
+    def test_etf_default_target_position_survives_turtle_sanitization(self):
+        class FakeTurtleStrategy:
+            params = (
+                ("entry_window", 55),
+                ("target_position_pct", 0.0),
+            )
+
+        sanitized = self.runner._sanitize_params(
+            FakeTurtleStrategy,
+            {"target_position_pct": 0.95},
+        )
+        self.assertEqual(sanitized, {"target_position_pct": 0.95})
 
 
 if __name__ == '__main__':
