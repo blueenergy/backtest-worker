@@ -16,11 +16,11 @@
 ### 1. 在 `quantFinance/.env` 里配置必要变量
 
 ```env
-# 必填：backtest-worker 内部认证共享密钥，与 quant-api 的 BACKTEST_WORKER_TOKEN 保持一致
-BACKTEST_WORKER_TOKEN=replace-with-a-long-random-secret
+# 必填：与 quant-api 连接同一个 MongoDB
+MONGO_URI=mongodb://mongo:27017
 
-# 可选：API 地址（默认走宿主机 3001 端口）
-BACKTEST_API_BASE_URL=http://host.docker.internal:3001/api
+# 可选：回测任务所在业务库
+BACKTEST_DB_NAME=finance
 ```
 
 ### 2. 启动（首次需要 build）
@@ -52,8 +52,8 @@ docker exec backtest-worker env | grep SCREENING
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `BACKTEST_API_BASE_URL` | `http://quant-api:3001/api` | API 服务地址。若 quant-api 未接入网络，改为 `http://host.docker.internal:3001/api` |
-| `BACKTEST_WORKER_TOKEN` | 无（必填） | backtest-worker 调用内部回测 API 的共享密钥，通过 `X-Backtest-Worker-Token` 发送 |
+| `MONGO_URI` | `mongodb://localhost:27017` | MongoDB 连接地址，worker 直接读取 `backtest_tasks` 并写入 `backtest_results` |
+| `BACKTEST_DB_NAME` | `finance` | 回测任务和结果所在业务库 |
 | `BACKTEST_WORKER_ID` | `backtest_worker_<hostname>` | Worker 唯一标识，留空自动用容器 hostname |
 | `BACKTEST_POLL_INTERVAL` | `5` | 轮询任务间隔（秒） |
 

@@ -170,8 +170,10 @@ All optimization scripts provide:
 | `--config` | Path to config.json file | None |
 | `--worker-id` | Worker unique identifier | `worker_YYYYMMDD_HHMMSS` |
 | `--poll-interval` | Polling interval (seconds) | `5` |
-| `--api-base` | API server address | `http://localhost:3001/api` |
-| `--worker-token` | Shared internal worker token (optional) | None |
+| `--mongo-uri` | MongoDB connection URI | `MONGO_URI` or `mongodb://localhost:27017` |
+| `--db-name` | MongoDB database for backtest tasks/results | `BACKTEST_DB_NAME`, `DB_NAME`, or `finance` |
+| `--api-base` | Deprecated; API task polling is no longer used | None |
+| `--worker-token` | Deprecated; API task polling is no longer used | None |
 | `--token` | Deprecated alias for `--worker-token` | None |
 | `--log-level` | Logging level | `INFO` |
 | `--test` | Test configuration and exit | False |
@@ -180,11 +182,11 @@ All optimization scripts provide:
 
 ```
 1. Worker starts
-2. Polls server for pending tasks
+2. Polls MongoDB `backtest_tasks` for pending tasks
 3. Claims task (atomic operation)
 4. Executes backtest using quant-strategies
 5. Collects results (metrics, trades, equity curve)
-6. Reports results to server
+6. Writes results to MongoDB `backtest_results`
 7. Repeat step 2
 ```
 
@@ -288,31 +290,30 @@ Worker outputs detailed logging information:
 ## Dependencies
 
 - Python 3.8+
-- requests
 - backtrader
 - quant-strategies (strategy library)
 - data-access-lib (data provider)
-- Access to quantFinance API server
+- Access to the MongoDB database used by quantFinance
 - matplotlib (for visualization)
 - quantstats (for HTML reports)
 
 ## Troubleshooting
 
-### Issue: Cannot connect to API server
+### Issue: Cannot connect to MongoDB
 
 ```bash
-# Check network connectivity
-curl http://localhost:3001/api/backtest/tasks/pending/poll
+# Check worker configuration
+python worker/backtest_worker.py --test
 
-# Check firewall settings
-# Ensure port 3001 is accessible
+# Check MongoDB connectivity
+mongosh "$MONGO_URI" --eval 'db.runCommand({ ping: 1 })'
 ```
 
-### Issue: Authentication failure
+### Issue: No tasks are picked up
 
 ```bash
-# Use worker token parameter
-python worker/backtest_worker.py --worker-token YOUR_BACKTEST_WORKER_TOKEN
+# Confirm pending tasks are in the same business DB used by the worker
+mongosh "$MONGO_URI/finance" --eval 'db.backtest_tasks.countDocuments({ status: "pending" })'
 ```
 
 ### Issue: Missing dependencies

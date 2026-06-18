@@ -3,7 +3,7 @@
 
 This tests the core functionality of the backtest worker system:
 - SimpleBacktestRunner functionality
-- BacktestWorkerService API interactions
+- BacktestWorkerService MongoDB task interactions
 - Configuration loading
 - Error handling
 """
@@ -96,8 +96,8 @@ def test_config_loading():
     # Create a temporary config file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         config_data = {
-            "api_base_url": "http://test-server:3001/api",
-            "worker_token": "test_token_123",
+            "mongo_uri": "mongodb://test-mongo:27017",
+            "db_name": "finance_test",
             "worker_id": "test_worker_01",
             "poll_interval": 10,
             "log_level": "DEBUG"
@@ -108,8 +108,8 @@ def test_config_loading():
     try:
         # Test config loading
         config = load_config(config_path)
-        assert config['api_base_url'] == "http://test-server:3001/api"
-        assert config['worker_token'] == "test_token_123"
+        assert config['mongo_uri'] == "mongodb://test-mongo:27017"
+        assert config['db_name'] == "finance_test"
         assert config['worker_id'] == "test_worker_01"
         assert config['poll_interval'] == 10
         assert config['log_level'] == "DEBUG"
@@ -119,45 +119,37 @@ def test_config_loading():
         os.unlink(config_path)
 
 
-@patch('worker.backtest_worker.requests.get')
-def test_worker_poll_tasks(mock_get):
+def test_worker_poll_tasks():
     """Test that worker can poll for tasks."""
-    # Mock successful response with task
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
+    task_store = Mock()
+    task_store.poll_task.return_value = {
         'task_id': 'test_task_001',
         'symbol': 'AAPL',
         'strategy_key': 'turtle',
         'start_date': '20230101',
         'end_date': '20231231'
     }
-    mock_get.return_value = mock_response
     
     worker = BacktestWorkerService(
-        api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        task_store=task_store
     )
     
     task = worker.poll_tasks()
     assert task is not None
     assert task['task_id'] == 'test_task_001'
+    task_store.poll_task.assert_called_once()
     print("✅ Task polling works correctly")
 
 
-@patch('worker.backtest_worker.requests.get')
-def test_worker_poll_no_tasks(mock_get):
+def test_worker_poll_no_tasks():
     """Test that worker handles no tasks correctly."""
-    # Mock 204 No Content response
-    mock_response = Mock()
-    mock_response.status_code = 204
-    mock_get.return_value = mock_response
+    task_store = Mock()
+    task_store.poll_task.return_value = None
     
     worker = BacktestWorkerService(
-        api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        task_store=task_store
     )
     
     task = worker.poll_tasks()
@@ -165,35 +157,30 @@ def test_worker_poll_no_tasks(mock_get):
     print("✅ No tasks handling works correctly")
 
 
-@patch('worker.backtest_worker.requests.post')
-def test_worker_claim_task(mock_post):
+def test_worker_claim_task():
     """Test that worker can claim tasks."""
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_post.return_value = mock_response
+    task_store = Mock()
+    task_store.claim_task.return_value = True
     
     worker = BacktestWorkerService(
-        api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        task_store=task_store
     )
     
     success = worker.claim_task('test_task_001')
     assert success is True
+    task_store.claim_task.assert_called_once_with('test_task_001', 'test_worker')
     print("✅ Task claiming works correctly")
 
 
-@patch('worker.backtest_worker.requests.post')
-def test_worker_report_success(mock_post):
+def test_worker_report_success():
     """Test that worker can report successful results."""
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_post.return_value = mock_response
+    task_store = Mock()
+    task_store.report_success.return_value = True
     
     worker = BacktestWorkerService(
-        api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        task_store=task_store
     )
     
     results = {
@@ -204,24 +191,23 @@ def test_worker_report_success(mock_post):
     
     success = worker.report_success('test_task_001', results)
     assert success is True
+    task_store.report_success.assert_called_once_with('test_task_001', results)
     print("✅ Success reporting works correctly")
 
 
-@patch('worker.backtest_worker.requests.post')
-def test_worker_report_failure(mock_post):
+def test_worker_report_failure():
     """Test that worker can report failures."""
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_post.return_value = mock_response
+    task_store = Mock()
+    task_store.report_failure.return_value = True
     
     worker = BacktestWorkerService(
-        api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        task_store=task_store
     )
     
     success = worker.report_failure('test_task_001', 'Test error message')
     assert success is True
+    task_store.report_failure.assert_called_once_with('test_task_001', 'Test error message')
     print("✅ Failure reporting works correctly")
 
 

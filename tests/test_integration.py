@@ -6,7 +6,7 @@ This tests the integration between different components of the backtest worker s
 
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import pandas as pd
 import backtrader as bt
 
@@ -116,60 +116,44 @@ def test_worker_with_real_strategies():
 
 def test_worker_error_handling():
     """Test worker error handling for various failure scenarios."""
+    task_store = Mock()
     worker = BacktestWorkerService(
-        api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        task_store=task_store
     )
     
-    # Test network error during polling
-    with patch('worker.backtest_worker.requests.get') as mock_get:
-        mock_get.side_effect = Exception("Network error")
-        
-        try:
-            task = worker.poll_tasks()
-            assert task is None
-            print("✅ Network error during polling handled correctly")
-        except Exception as e:
-            # Network errors are expected in test environment
-            print(f"✅ Network error during polling handled: {e}")
+    # Test database error during polling
+    task_store.poll_task.side_effect = Exception("Database error")
+    task = worker.poll_tasks()
+    assert task is None
+    print("✅ Database error during polling handled correctly")
     
-    # Test network error during claiming
-    with patch('worker.backtest_worker.requests.post') as mock_post:
-        mock_post.side_effect = Exception("Network error")
-        
-        try:
-            success = worker.claim_task('test_task_001')
-            assert success is False
-            print("✅ Network error during claiming handled correctly")
-        except Exception as e:
-            print(f"✅ Network error during claiming handled: {e}")
+    # Test database error during claiming
+    task_store.claim_task.side_effect = Exception("Database error")
+    success = worker.claim_task('test_task_001')
+    assert success is False
+    print("✅ Database error during claiming handled correctly")
     
-    # Test network error during reporting
-    with patch('worker.backtest_worker.requests.post') as mock_post:
-        mock_post.side_effect = Exception("Network error")
-        
-        try:
-            success = worker.report_success('test_task_001', {'metrics': {}})
-            assert success is False
-            print("✅ Network error during success reporting handled correctly")
-        except Exception as e:
-            print(f"✅ Network error during success reporting handled: {e}")
+    # Test database error during reporting
+    task_store.report_success.side_effect = Exception("Database error")
+    success = worker.report_success('test_task_001', {'metrics': {}})
+    assert success is False
+    print("✅ Database error during success reporting handled correctly")
 
 
-def test_worker_authentication_headers():
-    """Test that worker properly sets authentication headers."""
+def test_worker_deprecated_token_is_ignored():
+    """Test that deprecated API token args do not affect DB task polling."""
+    task_store = Mock()
+    task_store.poll_task.return_value = None
     worker = BacktestWorkerService(
-        api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        worker_token="test_token_123"
+        worker_token="test_token_123",
+        task_store=task_store,
     )
     
-    headers = worker._get_headers()
-    assert 'X-Backtest-Worker-Token' in headers
-    assert headers['X-Backtest-Worker-Token'] == 'test_token_123'
-    assert headers['Content-Type'] == 'application/json'
-    print("✅ Authentication headers set correctly")
+    assert worker.poll_tasks() is None
+    task_store.poll_task.assert_called_once()
+    print("✅ Deprecated token ignored correctly")
 
 
 def test_worker_format_results_edge_cases():
@@ -314,7 +298,7 @@ if __name__ == '__main__':
         test_end_to_end_backtest_flow()
         test_worker_with_real_strategies()
         test_worker_error_handling()
-        test_worker_authentication_headers()
+        test_worker_deprecated_token_is_ignored()
         test_worker_format_results_edge_cases()
         test_worker_process_task_integration()
         test_worker_with_different_modes()

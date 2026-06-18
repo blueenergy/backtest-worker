@@ -1,6 +1,6 @@
 {
-  "api_base_url": "http://180.184.30.225/api",
-  "worker_token": "Your shared BACKTEST_WORKER_TOKEN",
+  "mongo_uri": "mongodb://localhost:27017",
+  "db_name": "finance",
   "worker_id": "backtest_worker_001",
   "poll_interval": 5.0,
   "log_level": "INFO",

@@ -2,15 +2,15 @@
 """
 Backtest Worker Service
 
-This service polls for pending backtest tasks from the server,
-executes them using quant-strategies, and reports results back.
+This service polls pending backtest tasks from MongoDB, executes them
+using quant-strategies, and writes results back to MongoDB.
 
 Usage:
     # Use config file (recommended)
     python backtest_worker.py --config config.json
     
     # Use command line arguments
-    python backtest_worker.py --worker-id WORKER_ID --worker-token TOKEN
+    python backtest_worker.py --worker-id WORKER_ID
 """
 
 import sys
@@ -21,17 +21,21 @@ import logging
 import signal
 import statistics
 import os
-from datetime import datetime
+import math
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
-import requests
+from pymongo import MongoClient
 
 # Add parent directory to path for strategy imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from simple_backtest_runner import SimpleBacktestRunner
+try:
+    from simple_backtest_runner import SimpleBacktestRunner
+except ModuleNotFoundError:
+    from worker.simple_backtest_runner import SimpleBacktestRunner
 from quant_strategies.strategies import STRATEGY_MAP
 
 # Configure logging
@@ -43,7 +47,7 @@ log = logging.getLogger(__name__)
 
 
 def _normalize_task_date(value: Any) -> str:
-    """Return YYYYMMDD for API task dates, or empty string when missing."""
+    """Return YYYYMMDD for task dates, or empty string when missing."""
     if value is None:
         return ""
     text = str(value).strip()
@@ -58,83 +62,209 @@ def _validate_task_dates(start_date: str, end_date: str) -> None:
     if len(end_date) != 8 or not end_date.isdigit():
         raise ValueError(f"Invalid or missing end_date: {end_date or '<empty>'}")
 
+
+def _clean_for_mongo(value: Any) -> Any:
+    """Normalize worker result values before writing them to MongoDB."""
+    if value is None or isinstance(value, (str, bool, datetime, date)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, int):
+        if -(2 ** 63) <= value <= (2 ** 63 - 1):
+            return value
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _clean_for_mongo(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clean_for_mongo(v) for v in value]
+    if hasattr(value, "item"):
+        try:
+            return _clean_for_mongo(value.item())
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
+
+
+class MongoBacktestTaskStore:
+    """MongoDB-backed task queue for backtest workers."""
+
+    def __init__(
+        self,
+        mongo_uri: Optional[str] = None,
+        db_name: Optional[str] = None,
+        db: Any = None,
+    ):
+        self.mongo_uri = mongo_uri or os.getenv("MONGO_URI", "mongodb://localhost:27017")
+        self.db_name = db_name or os.getenv("BACKTEST_DB_NAME") or os.getenv("DB_NAME") or "finance"
+        self._client = None if db is not None else MongoClient(self.mongo_uri)
+        self.db = db or self._client[self.db_name]
+        self.backtest_tasks = self.db["backtest_tasks"]
+        self.backtest_results = self.db["backtest_results"]
+
+    def poll_task(self) -> Optional[Dict[str, Any]]:
+        """Return the oldest valid pending task without claiming it."""
+        cursor = (
+            self.backtest_tasks
+            .find({
+                "status": "pending",
+                "start_date": {"$nin": ["", None]},
+                "end_date": {"$nin": ["", None]},
+            })
+            .sort("created_at", 1)
+            .limit(1)
+        )
+        task = next(iter(cursor), None)
+        if not task:
+            return None
+        return {
+            "task_id": task["task_id"],
+            "user_id": str(task.get("user_id", "")),
+            "symbol": task["symbol"],
+            "asset_type": (task.get("asset_type") or "stock").lower(),
+            "strategy_key": task["strategy_key"],
+            "preset": task.get("preset"),
+            "strategy_params": task.get("strategy_params", {}),
+            "start_date": task["start_date"],
+            "end_date": task["end_date"],
+            "initial_cash": task.get("initial_cash", 1000000.0),
+            "created_at": task.get("created_at"),
+        }
+
+    def claim_task(self, task_id: str, worker_id: str) -> bool:
+        result = self.backtest_tasks.update_one(
+            {"task_id": task_id, "status": "pending"},
+            {
+                "$set": {
+                    "status": "claimed",
+                    "worker_id": worker_id,
+                    "started_at": datetime.now(),
+                }
+            },
+        )
+        return result.modified_count > 0
+
+    def report_success(self, task_id: str, results: Dict[str, Any]) -> bool:
+        task = self.backtest_tasks.find_one({"task_id": task_id})
+        if not task:
+            log.error(f"Backtest task not found: {task_id}")
+            return False
+        if task.get("status") not in ["claimed", "running"]:
+            log.error(f"Cannot report results for task {task_id} in status: {task.get('status')}")
+            return False
+
+        result_doc = _clean_for_mongo({
+            "task_id": task_id,
+            "user_id": task.get("user_id"),
+            "symbol": task.get("symbol"),
+            "asset_type": (task.get("asset_type") or "stock").lower(),
+            "strategy_key": task.get("strategy_key"),
+            "preset": task.get("preset"),
+            "strategy_params": task.get("strategy_params", {}),
+            "batch_id": task.get("batch_id"),
+            "metrics": results.get("metrics", {}),
+            "trades": results.get("trades", []),
+            "equity_curve": results.get("equity_curve", []),
+            "created_at": datetime.now(),
+        })
+
+        try:
+            self.backtest_results.update_one(
+                {"task_id": task_id},
+                {"$set": result_doc},
+                upsert=True,
+            )
+            self.backtest_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "completed_at": datetime.now(),
+                    }
+                },
+            )
+            return True
+        except Exception as exc:
+            log.error(f"Failed to persist backtest result for {task_id}: {exc}", exc_info=True)
+            self.backtest_tasks.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error_message": f"Failed to persist backtest result: {exc}",
+                        "completed_at": datetime.now(),
+                    }
+                },
+            )
+            return False
+
+    def report_failure(self, task_id: str, error_message: str) -> bool:
+        result = self.backtest_tasks.update_one(
+            {"task_id": task_id},
+            {
+                "$set": {
+                    "status": "failed",
+                    "error_message": error_message or "Backtest failed",
+                    "completed_at": datetime.now(),
+                }
+            },
+        )
+        return result.modified_count > 0
+
+
 class BacktestWorkerService:
     """Service that polls for backtest tasks and executes them."""
     
     def __init__(
         self,
-        api_base: str = "http://localhost:3001/api",
         worker_id: Optional[str] = None,
         poll_interval: int = 5,
         access_token: Optional[str] = None,
         worker_token: Optional[str] = None,
+        api_base: Optional[str] = None,
+        mongo_uri: Optional[str] = None,
+        db_name: Optional[str] = None,
+        task_store: Optional[MongoBacktestTaskStore] = None,
     ):
         """
         Initialize the backtest worker service.
         
         Args:
-            api_base: Base URL of the API server
             worker_id: Unique identifier for this worker
             poll_interval: Seconds to wait between polling
-            worker_token: Shared internal token for backtest-worker APIs
+            mongo_uri: MongoDB connection URI
+            db_name: MongoDB database containing backtest_tasks/results
         """
-        self.api_base = api_base.rstrip('/')
+        self.api_base = (api_base or "").rstrip("/")
         self.worker_id = worker_id or f"worker_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.poll_interval = poll_interval
+        # Deprecated API auth args are accepted only for old configs/callers.
         self.worker_token = worker_token or access_token
         self.running = False
+        self.task_store = task_store or MongoBacktestTaskStore(mongo_uri=mongo_uri, db_name=db_name)
         
         # Create runner instance
         self.runner = SimpleBacktestRunner()
         
         log.info(f"Initialized BacktestWorkerService: {self.worker_id}")
     
-    def _get_headers(self) -> Dict[str, str]:
-        """Get HTTP headers for API requests."""
-        headers = {'Content-Type': 'application/json'}
-        if self.worker_token:
-            headers['X-Backtest-Worker-Token'] = self.worker_token
-        return headers
-    
     def poll_tasks(self) -> Optional[Dict[str, Any]]:
         """
-        Poll for pending backtest tasks.
+        Poll for pending backtest tasks from MongoDB.
         
         Returns:
             Task data if available, None otherwise
         """
         try:
-            response = requests.get(
-                f"{self.api_base}/backtest/tasks/pending/poll",
-                headers=self._get_headers(),
-                params={'worker_id': self.worker_id},
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Handle both list and dict responses
-                if isinstance(data, list):
-                    if data:  # Non-empty list, return first task
-                        task = data[0]
-                        log.info(f"Found pending task: {task.get('task_id')}")
-                        return task
-                    return None
-                elif isinstance(data, dict) and data:  # Non-empty dict
-                    log.info(f"Found pending task: {data.get('task_id')}")
-                    return data
-                else:
-                    return None
-                    
-            elif response.status_code == 204:
-                # No tasks available
-                return None
-            else:
-                log.error(f"Poll failed: {response.status_code} - {response.text}")
-                return None
-                
-        except requests.exceptions.RequestException as e:
+            task = self.task_store.poll_task()
+            if task:
+                log.info(f"Found pending task: {task.get('task_id')}")
+            return task
+        except Exception as e:
             log.error(f"Error polling tasks: {e}")
             return None
     
@@ -149,23 +279,12 @@ class BacktestWorkerService:
             True if claimed successfully, False otherwise
         """
         try:
-            response = requests.post(
-                f"{self.api_base}/backtest/tasks/{task_id}/claim",
-                headers=self._get_headers(),
-                params={'worker_id': self.worker_id},  # Send as query parameter
-                timeout=10
-            )
-            
-            if response.status_code == 200:
+            if self.task_store.claim_task(task_id, self.worker_id):
                 log.info(f"Successfully claimed task: {task_id}")
                 return True
-            else:
-                log.warning(f"Failed to claim task {task_id}: {response.status_code}")
-                if response.status_code == 422:
-                    log.error(f"Validation error: {response.text}")
-                return False
-                
-        except requests.exceptions.RequestException as e:
+            log.warning(f"Failed to claim task {task_id}: already claimed or not pending")
+            return False
+        except Exception as e:
             log.error(f"Error claiming task {task_id}: {e}")
             return False
     
@@ -255,7 +374,7 @@ class BacktestWorkerService:
     
     def report_success(self, task_id: str, results: Dict[str, Any]) -> bool:
         """
-        Report successful backtest results to server.
+        Report successful backtest results to MongoDB.
         
         Args:
             task_id: ID of the completed task
@@ -265,35 +384,18 @@ class BacktestWorkerService:
             True if reported successfully, False otherwise
         """
         try:
-            # Results already in API-compatible format from SimpleBacktestRunner
-            # Structure: {'metrics': {...}, 'trades': [...], 'equity_curve': [...]}
-            response = requests.post(
-                f"{self.api_base}/backtest/tasks/{task_id}/report",
-                headers=self._get_headers(),
-                json=results,  # Send results directly without wrapping
-                timeout=30
-            )
-            
-            if response.status_code == 200:
+            if self.task_store.report_success(task_id, results):
                 log.info(f"Successfully reported results for {task_id}")
                 return True
-            else:
-                log.error(f"Failed to report results for {task_id}: {response.status_code}")
-                # Log response body for debugging
-                try:
-                    error_detail = response.json()
-                    log.error(f"Server response: {error_detail}")
-                except Exception:
-                    log.error(f"Server response (text): {response.text[:500]}")
-                return False
-                
-        except requests.exceptions.RequestException as e:
+            log.error(f"Failed to report results for {task_id}")
+            return False
+        except Exception as e:
             log.error(f"Error reporting results for {task_id}: {e}")
             return False
     
     def report_failure(self, task_id: str, error_message: str) -> bool:
         """
-        Report failed backtest to server.
+        Report failed backtest to MongoDB.
         
         Args:
             task_id: ID of the failed task
@@ -303,24 +405,12 @@ class BacktestWorkerService:
             True if reported successfully, False otherwise
         """
         try:
-            response = requests.post(
-                f"{self.api_base}/backtest/tasks/{task_id}/fail",
-                headers=self._get_headers(),
-                json={
-                    'worker_id': self.worker_id,
-                    'error_message': error_message
-                },
-                timeout=10
-            )
-            
-            if response.status_code == 200:
+            if self.task_store.report_failure(task_id, error_message):
                 log.info(f"Successfully reported failure for {task_id}")
                 return True
-            else:
-                log.error(f"Failed to report failure for {task_id}: {response.status_code}")
-                return False
-                
-        except requests.exceptions.RequestException as e:
+            log.error(f"Failed to report failure for {task_id}: task not found")
+            return False
+        except Exception as e:
             log.error(f"Error reporting failure for {task_id}: {e}")
             return False
     
@@ -360,7 +450,7 @@ class BacktestWorkerService:
         """Main worker loop."""
         self.running = True
         log.info(f"Starting backtest worker: {self.worker_id}")
-        log.info(f"API Base: {self.api_base}")
+        log.info(f"MongoDB: {self.task_store.mongo_uri}/{self.task_store.db_name}")
         log.info(f"Poll Interval: {self.poll_interval}s")
         
         while self.running:
@@ -426,8 +516,8 @@ Examples:
   # Override with command line arguments
   python backtest_worker.py --config config.json --worker-id my_worker
   
-  # Use only command line arguments (not recommended)
-  python backtest_worker.py --api-base http://localhost:3001/api --worker-token YOUR_TOKEN
+  # Use only command line arguments
+  python backtest_worker.py --mongo-uri mongodb://localhost:27017 --db-name finance
         """
     )
     parser.add_argument(
@@ -436,7 +526,15 @@ Examples:
     )
     parser.add_argument(
         '--api-base',
-        help='Base URL of the API server (overrides config)'
+        help='Deprecated; tasks are read directly from MongoDB'
+    )
+    parser.add_argument(
+        '--mongo-uri',
+        help='MongoDB connection URI (overrides MONGO_URI/config)'
+    )
+    parser.add_argument(
+        '--db-name',
+        help='MongoDB database for backtest tasks/results (overrides BACKTEST_DB_NAME/DB_NAME/config)'
     )
     parser.add_argument(
         '--worker-id',
@@ -449,11 +547,11 @@ Examples:
     )
     parser.add_argument(
         '--token',
-        help='Deprecated alias for --worker-token'
+        help='Deprecated; API task polling is no longer used'
     )
     parser.add_argument(
         '--worker-token',
-        help='Shared worker token for backtest API authentication (overrides config)'
+        help='Deprecated; API task polling is no longer used'
     )
     parser.add_argument(
         '--log-level',
@@ -477,14 +575,21 @@ Examples:
         config = load_config('config.json')
     
     # Command line arguments override config file
-    api_base = args.api_base or config.get('api_base_url', 'http://localhost:3001/api')
+    api_base = args.api_base or config.get('api_base_url')
+    mongo_uri = args.mongo_uri or os.getenv("MONGO_URI") or config.get("mongo_uri")
+    db_name = (
+        args.db_name
+        or os.getenv("BACKTEST_DB_NAME")
+        or os.getenv("DB_NAME")
+        or config.get("db_name")
+        or config.get("backtest_db_name")
+        or "finance"
+    )
     worker_id = args.worker_id or config.get('worker_id')
     poll_interval = args.poll_interval or config.get('poll_interval', 5.0)
     worker_token = (
         args.worker_token
         or args.token
-        or os.getenv("BACKTEST_WORKER_TOKEN")
-        or os.getenv("API_TOKEN")
         or config.get('worker_token')
         or config.get('api_token')
     )
@@ -492,12 +597,8 @@ Examples:
     
     # Update log level
     logging.getLogger().setLevel(getattr(logging, log_level))
-    
-    # Validate required parameters
-    if not worker_token:
-        log.error("Backtest worker token is required!")
-        log.info("Please provide worker_token in config.json or BACKTEST_WORKER_TOKEN in environment")
-        sys.exit(1)
+    if worker_token:
+        log.warning("worker_token is deprecated and ignored; backtest tasks are read from MongoDB")
     
     # Create worker service
     worker = BacktestWorkerService(
@@ -505,6 +606,8 @@ Examples:
         worker_id=worker_id,
         poll_interval=poll_interval,
         worker_token=worker_token,
+        mongo_uri=mongo_uri,
+        db_name=db_name,
     )
     
     # Test mode: verify configuration and connection, then exit
@@ -512,50 +615,21 @@ Examples:
         log.info("=" * 60)
         log.info("Running in TEST mode - will verify config and exit")
         log.info("=" * 60)
-        log.info(f"API Base: {api_base}")
+        log.info(f"Mongo URI: {worker.task_store.mongo_uri}")
+        log.info(f"Backtest DB: {worker.task_store.db_name}")
         log.info(f"Worker ID: {worker_id or '(auto-generated)'}")
         log.info(f"Poll Interval: {poll_interval}s")
-        log.info(f"Worker token: {'*' * 20}...{worker_token[-10:] if len(worker_token) > 10 else '***'}")
         log.info("")
         
-        # Test API connection
-        log.info("Testing API connection...")
+        log.info("Testing MongoDB connection...")
         try:
-            response = requests.get(
-                f"{api_base}/backtest/tasks/pending/poll",
-                headers={'X-Backtest-Worker-Token': worker_token},
-                timeout=10
-            )
-            log.info(f"Received response: {response.status_code}")
-            
-            if response.status_code == 200:
-                log.info("✅ API connection successful!")
-                task = response.json()
-                # API returns a list or single object
-                if isinstance(task, list):
-                    if task:  # Non-empty list
-                        log.info(f"✅ Found {len(task)} pending task(s)")
-                        log.info(f"   First task: {task[0].get('task_id')}")
-                    else:
-                        log.info("✅ No pending tasks (this is OK)")
-                elif isinstance(task, dict):
-                    if task:  # Non-empty dict
-                        log.info(f"✅ Found pending task: {task.get('task_id')}")
-                    else:
-                        log.info("✅ No pending tasks (this is OK)")
-                else:
-                    log.info("✅ No pending tasks (this is OK)")
-            elif response.status_code == 403:
-                log.error("❌ Authentication failed - invalid token")
-                log.info("Please check BACKTEST_WORKER_TOKEN / worker_token")
-                sys.exit(1)
+            worker.task_store.db.command("ping")
+            task = worker.poll_tasks()
+            log.info("✅ MongoDB connection successful!")
+            if task:
+                log.info(f"✅ Found pending task: {task.get('task_id')}")
             else:
-                log.warning(f"⚠️  Unexpected response: {response.status_code}")
-                log.info(f"Response: {response.text}")
-        except requests.exceptions.ConnectionError as e:
-            log.error(f"❌ Cannot connect to API server: {e}")
-            log.info(f"Please check if server is running at: {api_base}")
-            sys.exit(1)
+                log.info("✅ No pending tasks (this is OK)")
         except Exception as e:
             log.error(f"❌ Test failed: {e}", exc_info=True)
             sys.exit(1)
