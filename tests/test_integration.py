@@ -24,13 +24,13 @@ def test_end_to_end_backtest_flow():
     # Mock the data loading to avoid actual database calls
     with patch.object(runner.data_loader, 'fetch_frame') as mock_fetch:
         # Create mock data
-        dates = pd.date_range(start='2023-01-01', periods=5, freq='D')
+        dates = pd.date_range(start='2023-01-01', periods=60, freq='D')
         mock_df = pd.DataFrame({
-            'open': [100, 101, 102, 103, 104],
-            'high': [101, 102, 103, 104, 105],
-            'low': [99, 100, 101, 102, 103],
-            'close': [101, 102, 103, 104, 105],
-            'volume': [1000, 1100, 1200, 1300, 1400]
+            'open': [100 + i for i in range(60)],
+            'high': [101 + i for i in range(60)],
+            'low': [99 + i for i in range(60)],
+            'close': [100.5 + i for i in range(60)],
+            'volume': [1000 + i * 10 for i in range(60)]
         }, index=dates)
         
         mock_fetch.return_value = mock_df
@@ -41,14 +41,12 @@ def test_end_to_end_backtest_flow():
             strategy_class=MockStrategy,
             strategy_params={'worker_mode': 'backtest'},
             start_date='20230101',
-            end_date='20230105',
+            end_date='20230301',
             initial_cash=100000.0
         )
         
         # Verify results structure
-        assert 'symbol' in results
-        assert 'final_value' in results
-        assert 'total_profit' in results
+        assert 'metrics' in results
         assert 'trades' in results
         assert 'equity_curve' in results
         
@@ -57,7 +55,7 @@ def test_end_to_end_backtest_flow():
 
 def test_worker_with_real_strategies():
     """Test worker integration with real strategies from quant-strategies."""
-    from strategies import TurtleTradingStrategy, GridTradingStrategy
+    from quant_strategies.strategies import TurtleTradingStrategy, GridTradingStrategy
     
     # Test with Turtle strategy
     runner = SimpleBacktestRunner()
@@ -90,8 +88,8 @@ def test_worker_with_real_strategies():
             initial_cash=100000.0
         )
         
-        assert results['symbol'] == 'TSLA'
-        assert 'final_value' in results
+        assert 'metrics' in results
+        assert 'trades' in results
         print("✅ Turtle strategy integration works correctly")
         
         # Test Grid strategy
@@ -109,8 +107,8 @@ def test_worker_with_real_strategies():
             initial_cash=100000.0
         )
         
-        assert results['symbol'] == 'AAPL'
-        assert 'final_value' in results
+        assert 'metrics' in results
+        assert 'trades' in results
         print("✅ Grid strategy integration works correctly")
 
 
@@ -166,16 +164,13 @@ def test_worker_format_results_edge_cases():
     
     # Test with minimal data
     minimal_results = {
-        'symbol': 'TEST',
-        'start_date': '20230101',
-        'end_date': '20230102',
-        'initial_cash': 100000.0,
-        'final_value': 100000.0,  # No profit/loss
-        'total_profit': 0.0,
-        'profit_percentage': 0.0,
+        'metrics': {
+            'total_return': 0.0,
+            'win_rate': 0.0,
+            'total_trades': 0,
+        },
         'trades': [],  # No trades
         'equity_curve': [],  # No equity curve
-        'strategy_name': 'TestStrategy'
     }
     
     formatted = worker._format_results(minimal_results)
@@ -188,16 +183,13 @@ def test_worker_format_results_edge_cases():
     
     # Test with single equity point (should not crash)
     single_point_results = {
-        'symbol': 'TEST',
-        'start_date': '20230101',
-        'end_date': '20230102',
-        'initial_cash': 100000.0,
-        'final_value': 100100.0,
-        'total_profit': 100.0,
-        'profit_percentage': 0.001,
+        'metrics': {
+            'total_return': 0.001,
+            'win_rate': 1.0,
+            'total_trades': 1,
+        },
         'trades': [{'pnl': 100}],
         'equity_curve': [{'date': '20230102', 'value': 100100.0}],  # Single point
-        'strategy_name': 'TestStrategy'
     }
     
     formatted = worker._format_results(single_point_results)
@@ -252,20 +244,18 @@ def test_worker_with_different_modes():
     # This test mainly verifies that the worker can handle different scenarios
     # without crashing, since the mode logic is handled in the strategy itself
     raw_results = {
-        'symbol': 'TEST',
-        'start_date': '20230101',
-        'end_date': '20230105',
-        'initial_cash': 100000.0,
-        'final_value': 105000.0,
-        'total_profit': 5000.0,
-        'profit_percentage': 0.05,
+        'metrics': {
+            'total_return': 0.05,
+            'max_drawdown': 0.0,
+            'win_rate': 1.0,
+            'total_trades': 2,
+        },
         'trades': [{'pnl': 1000}, {'pnl': 1500}],
         'equity_curve': [
             {'date': '20230101', 'value': 100000.0},
             {'date': '20230102', 'value': 101000.0},
             {'date': '20230105', 'value': 105000.0}
         ],
-        'strategy_name': 'TestStrategy'
     }
     
     formatted = worker._format_results(raw_results)

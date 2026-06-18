@@ -85,9 +85,12 @@ def test_runner_collect_results():
         100000.0
     )
     
-    assert 'symbol' in results
-    assert 'final_value' in results
-    assert results['symbol'] == 'TEST'
+    assert 'metrics' in results
+    assert 'trades' in results
+    assert 'equity_curve' in results
+    assert results['metrics']['total_return'] == 0.0
+    assert len(results['trades']) == 2
+    assert len(results['equity_curve']) == 2
     print("✅ Results collected successfully")
 
 
@@ -219,15 +222,14 @@ def test_worker_format_results():
         access_token="test_token"
     )
     
-    # Create sample raw results
+    # SimpleBacktestRunner already returns API-compatible results.
     raw_results = {
-        'symbol': 'TEST',
-        'start_date': '20230101',
-        'end_date': '20231231',
-        'initial_cash': 100000.0,
-        'final_value': 115000.0,
-        'total_profit': 15000.0,
-        'profit_percentage': 0.15,
+        'metrics': {
+            'total_return': 0.15,
+            'max_drawdown': -0.08,
+            'win_rate': 0.5,
+            'total_trades': 2,
+        },
         'trades': [
             {'pnl': 1000, 'datetime': '2023-06-01', 'price': 100, 'size': 100},
             {'pnl': -200, 'datetime': '2023-06-02', 'price': 99, 'size': 50}
@@ -237,7 +239,6 @@ def test_worker_format_results():
             {'date': '20230602', 'value': 100800.0},
             {'date': '20231231', 'value': 115000.0}
         ],
-        'strategy_name': 'TestStrategy'
     }
     
     formatted_results = worker._format_results(raw_results)
@@ -278,13 +279,12 @@ def test_worker_execute_backtest():
     # Mock the runner to avoid actual data fetching
     with patch.object(worker.runner, 'run_backtest') as mock_run_backtest:
         mock_run_backtest.return_value = {
-            'symbol': 'TEST',
-            'start_date': '20230101',
-            'end_date': '20230105',
-            'initial_cash': 100000.0,
-            'final_value': 100500.0,
-            'total_profit': 500.0,
-            'profit_percentage': 0.005,
+            'metrics': {
+                'total_return': 0.005,
+                'max_drawdown': 0.0,
+                'win_rate': 0.0,
+                'total_trades': 0,
+            },
             'trades': [],
             'equity_curve': [],
             'strategy_name': 'TurtleTradingStrategy'
@@ -399,16 +399,14 @@ def test_worker_format_results_with_empty_data():
     )
     
     raw_results = {
-        'symbol': 'TEST',
-        'start_date': '20230101',
-        'end_date': '20230105',
-        'initial_cash': 100000.0,
-        'final_value': 100000.0,
-        'total_profit': 0.0,
-        'profit_percentage': 0.0,
+        'metrics': {
+            'total_return': 0.0,
+            'max_drawdown': 0.0,
+            'win_rate': 0.0,
+            'total_trades': 0,
+        },
         'trades': [],
         'equity_curve': [],
-        'strategy_name': 'TestStrategy'
     }
     
     results = worker._format_results(raw_results)
