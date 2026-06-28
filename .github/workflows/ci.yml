@@ -265,10 +265,8 @@ jobs:
           INFRA_REPO_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          # Uses deploy-backtest workflow (BACKTEST_DEPLOY_* secrets) since
-          # this service may live on a different host from the main stack.
           curl -fsSL -X POST \
             -H "Authorization: Bearer ${INFRA_REPO_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/blueenergy/quant-infrastructure/dispatches \
-            -d "{\"event_type\":\"deploy-backtest\",\"client_payload\":{\"services\":\"backtest-worker\",\"tag\":\"${TAG}\"}}"
+            -d "{\"event_type\":\"deploy\",\"client_payload\":{\"services\":\"backtest-worker\",\"tag\":\"${TAG}\"}}"
