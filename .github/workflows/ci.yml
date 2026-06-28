@@ -83,7 +83,7 @@ jobs:
           pytest -q \
             tests/test_backtest_worker.py::test_config_loading \
             tests/test_backtest_worker.py::test_worker_poll_tasks \
-            tests/test_integration.py::test_worker_authentication_headers \
+            tests/test_integration.py::test_worker_deprecated_token_is_ignored \
             tests/test_simple_backtest_runner.py::TestSimpleBacktestRunner::test_fetch_etf_frame
 
   docker-build:
