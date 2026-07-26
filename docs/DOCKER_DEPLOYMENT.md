@@ -13,27 +13,32 @@
 
 ## 快速开始
 
-### 1. 在 `quantFinance/.env` 里配置必要变量
+### 1. 在 `quant-infrastructure/apps/.env` 里配置 Compose 插值变量
+
+`compose-dev.sh` 默认读取该文件（首次：`cp .env.example .env`）。常用项：`DOCKER_MONGO_URI`、`MONGO_DB` 等。
 
 ```env
-# 必填：与 quant-api 连接同一个 MongoDB
-MONGO_URI=mongodb://mongo:27017
+# 必填：与 quant-api 连接同一个 MongoDB（开发栈默认 quant-mongodb）
+DOCKER_MONGO_URI=mongodb://quant-mongodb:27017/
+MONGO_DB=finance
 
 # 可选：回测任务所在业务库
 BACKTEST_DB_NAME=finance
 ```
 
+服务专属变量可放在 `backtest-worker/.env`（compose 会通过 `env_file` 注入）。
+
 ### 2. 启动（首次需要 build）
 
 ```bash
-cd /path/to/quantFinance
-docker compose up -d --build backtest-worker
+cd /path/to/quant-infrastructure/apps
+./compose-dev.sh up -d --build backtest-worker
 ```
 
 ### 3. 查看日志
 
 ```bash
-docker compose logs -f backtest-worker
+./compose-dev.sh logs -f backtest-worker
 ```
 
 ### 4. 验证环境变量是否生效
@@ -42,7 +47,7 @@ docker compose logs -f backtest-worker
 docker exec backtest-worker env | grep SCREENING
 ```
 
-> ⚠️ **重要**：修改 `.env` 后必须用 `docker compose up -d backtest-worker`（不能用 `restart`），否则新变量不会生效。
+> ⚠️ **重要**：修改 `.env` 后必须用 `./compose-dev.sh up -d backtest-worker`（不能用 `restart`），否则新变量不会生效。
 
 ---
 
@@ -93,7 +98,7 @@ Backtest Worker 完全无状态，可部署多个实例自动分担任务：
 
 ```bash
 # 本机启动 3 个 worker
-docker compose up -d --scale backtest-worker=3
+./compose-dev.sh up -d --scale backtest-worker=3
 ```
 
 **注意**：多实例时，Screening Scheduler 只让一台机器跑，其他关掉：
