@@ -3,6 +3,7 @@
 # Testing - Use pytest like stock-execution-system
 pytest>=7.0
 pytest-cov>=4.0
+mongomock>=4.1.2
 coverage>=6.0
 
 # Code quality

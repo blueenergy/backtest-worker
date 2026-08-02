@@ -123,78 +123,52 @@ def test_config_loading():
 
 
 def test_worker_poll_tasks():
-    """Test that worker can poll for tasks."""
+    """Test that worker can claim tasks."""
     task_store = Mock()
-    task_store.poll_task.return_value = {
-        'task_id': 'test_task_001',
-        'symbol': 'AAPL',
-        'strategy_key': 'turtle',
-        'start_date': '20230101',
-        'end_date': '20231231'
+    task_store.claim_task.return_value = {
+        "task_id": "test_task_001",
+        "symbol": "AAPL",
+        "strategy_key": "turtle",
+        "start_date": "20230101",
+        "end_date": "20231231",
+        "lease_token": "worker:abc123",
     }
-    
-    worker = BacktestWorkerService(
-        worker_id="test_worker",
-        task_store=task_store
-    )
-    
+
+    worker = BacktestWorkerService(worker_id="test_worker", task_store=task_store)
     task = worker.poll_tasks()
     assert task is not None
-    assert task['task_id'] == 'test_task_001'
-    task_store.poll_task.assert_called_once()
+    assert task["task_id"] == "test_task_001"
+    task_store.claim_task.assert_called_once_with("test_worker")
     print("✅ Task polling works correctly")
 
 
 def test_worker_poll_no_tasks():
     """Test that worker handles no tasks correctly."""
     task_store = Mock()
-    task_store.poll_task.return_value = None
-    
-    worker = BacktestWorkerService(
-        worker_id="test_worker",
-        task_store=task_store
-    )
-    
+    task_store.claim_task.return_value = None
+
+    worker = BacktestWorkerService(worker_id="test_worker", task_store=task_store)
     task = worker.poll_tasks()
     assert task is None
     print("✅ No tasks handling works correctly")
-
-
-def test_worker_claim_task():
-    """Test that worker can claim tasks."""
-    task_store = Mock()
-    task_store.claim_task.return_value = True
-    
-    worker = BacktestWorkerService(
-        worker_id="test_worker",
-        task_store=task_store
-    )
-    
-    success = worker.claim_task('test_task_001')
-    assert success is True
-    task_store.claim_task.assert_called_once_with('test_task_001', 'test_worker')
-    print("✅ Task claiming works correctly")
 
 
 def test_worker_report_success():
     """Test that worker can report successful results."""
     task_store = Mock()
     task_store.report_success.return_value = True
-    
-    worker = BacktestWorkerService(
-        worker_id="test_worker",
-        task_store=task_store
-    )
-    
+
+    worker = BacktestWorkerService(worker_id="test_worker", task_store=task_store)
     results = {
-        'metrics': {'total_return': 0.15, 'max_drawdown': -0.08},
-        'equity_curve': [],
-        'trades': []
+        "metrics": {"total_return": 0.15, "max_drawdown": -0.08},
+        "equity_curve": [],
+        "trades": [],
     }
-    
-    success = worker.report_success('test_task_001', results)
+    success = worker.report_success("test_task_001", "token-1", results)
     assert success is True
-    task_store.report_success.assert_called_once_with('test_task_001', results)
+    task_store.report_success.assert_called_once_with(
+        "test_task_001", "test_worker", "token-1", results
+    )
     print("✅ Success reporting works correctly")
 
 
@@ -202,24 +176,27 @@ def test_worker_report_failure():
     """Test that worker can report failures."""
     task_store = Mock()
     task_store.report_failure.return_value = True
-    
-    worker = BacktestWorkerService(
-        worker_id="test_worker",
-        task_store=task_store
-    )
-    
-    success = worker.report_failure('test_task_001', 'Test error message')
+
+    worker = BacktestWorkerService(worker_id="test_worker", task_store=task_store)
+    success = worker.report_failure("test_task_001", "token-1", "Test error message")
     assert success is True
-    task_store.report_failure.assert_called_once_with('test_task_001', 'Test error message')
+    task_store.report_failure.assert_called_once_with(
+        "test_task_001", "test_worker", "token-1", "Test error message"
+    )
     print("✅ Failure reporting works correctly")
 
 
 def test_worker_format_results():
     """Test that worker correctly formats results with metrics."""
+    task_store = Mock()
+    task_store.heartbeat.return_value = True
+    task_store.record_worker_status.return_value = None
+
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        access_token="test_token",
+        task_store=task_store,
     )
     
     # SimpleBacktestRunner already returns API-compatible results.
@@ -270,10 +247,15 @@ def test_worker_execute_backtest():
         'initial_cash': 100000.0
     }
     
+    task_store = Mock()
+    task_store.heartbeat.return_value = True
+    task_store.record_worker_status.return_value = None
+
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        access_token="test_token",
+        task_store=task_store,
     )
     
     # Mock the runner to avoid actual data fetching
@@ -314,23 +296,30 @@ def test_worker_process_task_success():
         'initial_cash': 100000.0
     }
     
+    task_store = Mock()
+    task_store.heartbeat.return_value = True
+    task_store.record_worker_status.return_value = None
+
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        access_token="test_token",
+        task_store=task_store,
     )
     
-    # Mock all the necessary methods
-    with patch.object(worker, 'claim_task', return_value=True), \
-         patch.object(worker, 'execute_backtest') as mock_execute, \
-         patch.object(worker, 'report_success', return_value=True):
-        
+    with patch.object(worker, "execute_backtest") as mock_execute, \
+         patch.object(worker, "report_success", return_value=True):
+
         mock_execute.return_value = {
-            'metrics': {'total_return': 0.005},
-            'equity_curve': [],
-            'trades': []
+            "metrics": {"total_return": 0.005},
+            "equity_curve": [],
+            "trades": [],
         }
-        
+
+        task = {
+            **task,
+            "lease_token": "token-1",
+        }
         success = worker.process_task(task)
         assert success is True
         print("✅ Task processing works correctly")
@@ -348,17 +337,24 @@ def test_worker_process_task_failure():
         'initial_cash': 100000.0
     }
     
+    task_store = Mock()
+    task_store.heartbeat.return_value = True
+    task_store.record_worker_status.return_value = None
+
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        access_token="test_token",
+        task_store=task_store,
     )
     
-    # Mock failure in execution
-    with patch.object(worker, 'claim_task', return_value=True), \
-         patch.object(worker, 'execute_backtest', side_effect=Exception("Test error")), \
-         patch.object(worker, 'report_failure', return_value=True):
-        
+    with patch.object(worker, "execute_backtest", side_effect=Exception("Test error")), \
+         patch.object(worker, "report_failure", return_value=True):
+
+        task = {
+            **task,
+            "lease_token": "token-1",
+        }
         success = worker.process_task(task)
         assert success is False
         print("✅ Task failure handling works correctly")
@@ -376,10 +372,15 @@ def test_worker_execute_unknown_strategy():
         'initial_cash': 100000.0
     }
     
+    task_store = Mock()
+    task_store.heartbeat.return_value = True
+    task_store.record_worker_status.return_value = None
+
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        access_token="test_token",
+        task_store=task_store,
     )
     
     try:
@@ -390,12 +391,69 @@ def test_worker_execute_unknown_strategy():
         print("✅ Unknown strategy handling works correctly")
 
 
+def test_worker_exits_main_loop_after_sigterm_drain():
+    """SIGTERM must end the loop, or the pod hangs until the grace period kills it."""
+    task_store = Mock()
+    task_store.claim_task.return_value = None
+    task_store.reset_expired_jobs.return_value = 0
+
+    worker = BacktestWorkerService(
+        worker_id="test_worker",
+        poll_interval=0,
+        task_store=task_store,
+    )
+    worker.stop(draining=True)
+    worker.run()
+
+    assert worker.running is False
+    task_store.claim_task.assert_not_called()
+
+
+def test_worker_releases_in_flight_task_when_draining():
+    """A drain that starts mid-backtest must hand the task back, not fail it."""
+    task_store = Mock()
+    task_store.release_task.return_value = True
+
+    worker = BacktestWorkerService(
+        worker_id="test_worker",
+        task_store=task_store,
+    )
+    task = {
+        "task_id": "test_task_001",
+        "symbol": "TEST",
+        "strategy_key": "turtle",
+        "start_date": "20230101",
+        "end_date": "20230105",
+        "strategy_params": {},
+        "initial_cash": 100000.0,
+        "lease_token": "token-1",
+    }
+
+    def _drain_midway(_task):
+        worker.stop(draining=True)
+        return {"metrics": {}, "trades": [], "equity_curve": []}
+
+    with patch.object(worker, "execute_backtest", side_effect=_drain_midway):
+        assert worker.process_task(task) is False
+
+    task_store.release_task.assert_called_once_with(
+        "test_task_001", "test_worker", "token-1", "requeued after execution during drain"
+    )
+    task_store.report_success.assert_not_called()
+    task_store.report_failure.assert_not_called()
+
+
 def test_worker_format_results_with_empty_data():
     """Test that worker handles empty data correctly."""
+    task_store = Mock()
+    task_store.heartbeat.return_value = True
+    task_store.record_worker_status.return_value = None
+
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        access_token="test_token",
+        task_store=task_store,
     )
     
     raw_results = {
@@ -428,7 +486,6 @@ if __name__ == '__main__':
         test_config_loading()
         test_worker_poll_tasks()
         test_worker_poll_no_tasks()
-        test_worker_claim_task()
         test_worker_report_success()
         test_worker_report_failure()
         test_worker_format_results()

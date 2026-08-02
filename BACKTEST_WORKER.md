@@ -342,6 +342,22 @@ pip install -e ../quant-strategies  # or install from package
 3. **Limit worker permissions** - Run with dedicated user
 4. **Monitor logs** - Detect unusual behavior promptly
 
+## Queue worker roles and KEDA contract (next phase)
+
+- Run queue workers with `BACKTEST_ROLE=worker` (horizontally scalable).
+- Run screening with `BACKTEST_ROLE=screening` (singleton Deployment).
+- Scaling signal for KEDA should count **claimable** `pending` tasks in `backtest_tasks`
+  (same filter as worker claim: valid `start_date`/`end_date`).
+- Monitor expired leases separately via `status in (claimed,running)` and
+  `lease_expires_at < now` for operator alerts; do not treat them as pending depth.
+- Suggested future ScaledObject defaults (not deployed yet):
+  - `minReplicaCount: 0`
+  - `maxReplicaCount`: cluster budget (e.g. 8)
+  - `targetPendingTasksPerReplica`: 5–10
+  - `cooldownPeriod`: 300s after scale-down
+- Worker health: `/tmp/backtest_worker_healthy` touch + `worker_status` collection
+  (`worker_type=backtest_queue`) with `pending_tasks` depth.
+
 ## Related Documents
 
 - [config.example.json](./config.example.json) - Configuration template

@@ -119,30 +119,18 @@ def test_worker_error_handling():
         worker_id="test_worker",
         task_store=task_store
     )
-    
-    # Test database error during polling
-    task_store.poll_task.side_effect = Exception("Database error")
+
+    # A Mongo outage during claim must not kill the loop.
+    task_store.claim_task.side_effect = Exception("Database error")
     task = worker.poll_tasks()
     assert task is None
-    print("✅ Database error during polling handled correctly")
-    
-    # Test database error during claiming
-    task_store.claim_task.side_effect = Exception("Database error")
-    success = worker.claim_task('test_task_001')
-    assert success is False
     print("✅ Database error during claiming handled correctly")
-    
-    # Test database error during reporting
-    task_store.report_success.side_effect = Exception("Database error")
-    success = worker.report_success('test_task_001', {'metrics': {}})
-    assert success is False
-    print("✅ Database error during success reporting handled correctly")
 
 
 def test_worker_deprecated_token_is_ignored():
     """Test that deprecated API token args do not affect DB task polling."""
     task_store = Mock()
-    task_store.poll_task.return_value = None
+    task_store.claim_task.return_value = None
     worker = BacktestWorkerService(
         worker_id="test_worker",
         worker_token="test_token_123",
@@ -150,7 +138,7 @@ def test_worker_deprecated_token_is_ignored():
     )
     
     assert worker.poll_tasks() is None
-    task_store.poll_task.assert_called_once()
+    task_store.claim_task.assert_called_once_with("test_worker")
     print("✅ Deprecated token ignored correctly")
 
 
@@ -159,7 +147,8 @@ def test_worker_format_results_edge_cases():
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        access_token="test_token",
+        task_store=Mock(),
     )
     
     # Test with minimal data
@@ -202,7 +191,8 @@ def test_worker_process_task_integration():
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        access_token="test_token",
+        task_store=Mock(),
     )
     
     task = {
@@ -212,12 +202,11 @@ def test_worker_process_task_integration():
         'start_date': '20230101',
         'end_date': '20230105',
         'strategy_params': {'entry_window': 20, 'exit_window': 10},
-        'initial_cash': 100000.0
+        'initial_cash': 100000.0,
+        'lease_token': 'integration-token-1',
     }
     
-    # Mock all the dependencies
-    with patch.object(worker, 'claim_task', return_value=True), \
-         patch.object(worker, 'execute_backtest') as mock_execute, \
+    with patch.object(worker, 'execute_backtest') as mock_execute, \
          patch.object(worker, 'report_success', return_value=True):
         
         mock_execute.return_value = {
@@ -232,13 +221,27 @@ def test_worker_process_task_integration():
         print("✅ Complete task processing flow works correctly")
 
 
+def test_worker_rejects_task_without_lease_token():
+    """A task that arrives without a lease token cannot be fenced, so refuse it."""
+    worker = BacktestWorkerService(
+        worker_id="test_worker",
+        task_store=Mock(),
+    )
+
+    with patch.object(worker, 'execute_backtest') as mock_execute:
+        assert worker.process_task({'task_id': 'no_token_001'}) is False
+        mock_execute.assert_not_called()
+    print("✅ Task without lease token rejected correctly")
+
+
 def test_worker_with_different_modes():
     """Test worker behavior with different backtest modes."""
     # Test that different modes are handled properly in results
     worker = BacktestWorkerService(
         api_base="http://test-server:3001/api",
         worker_id="test_worker",
-        access_token="test_token"
+        access_token="test_token",
+        task_store=Mock(),
     )
     
     # This test mainly verifies that the worker can handle different scenarios
@@ -291,6 +294,7 @@ if __name__ == '__main__':
         test_worker_deprecated_token_is_ignored()
         test_worker_format_results_edge_cases()
         test_worker_process_task_integration()
+        test_worker_rejects_task_without_lease_token()
         test_worker_with_different_modes()
         
         print("=" * 50)
