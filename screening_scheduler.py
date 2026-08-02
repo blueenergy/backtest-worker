@@ -2,9 +2,12 @@
 """
 Screening scheduler: runs daily_full_market_screening.py on a schedule.
 
-Schedule logic (matches screening.sh):
-  - Weekday (Mon-Fri): run once at 18:30 CST using 60-day window
+Schedule logic:
+  - Weekday (Mon-Fri): run once at 18:30 CST using 250-day window
   - Weekend (Sat-Sun): run once at 08:00 CST using 360-day window
+
+  Windows must cover strategies that warm up long MAs (single_yang
+  use_min_ma_exit builds MA120). ~250 calendar days ≈ 170+ trading bars.
 
 Environment variables (all optional):
   SCREENING_MODE       : conservative | standard | aggressive | all (default: conservative)
@@ -101,7 +104,9 @@ def get_schedule():
     if MANUAL_DAYS_BACK:
         days_back = int(MANUAL_DAYS_BACK)
     else:
-        days_back = 120  # default: 120-day window for all days
+        now = datetime.now()
+        # Weekday: enough bars for MA120 warmup; weekend: fuller history.
+        days_back = 360 if now.weekday() >= 5 else 250
 
     return run_hour, run_minute, days_back
 

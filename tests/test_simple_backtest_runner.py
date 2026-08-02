@@ -204,6 +204,58 @@ class TestSimpleBacktestRunner(unittest.TestCase):
         )
         self.assertEqual(sanitized, {"target_position_pct": 0.95})
 
+    def test_estimate_required_bars_single_yang_uses_ma120(self):
+        """use_min_ma_exit builds MA120; short windows must not pass the pre-check."""
+        from quant_strategies.strategies import STRATEGY_MAP
+        from quant_strategies.strategy_params import get_preset
+
+        cls = STRATEGY_MAP["single_yang"]
+        # Strategy default alone (no explicit params)
+        self.assertEqual(self.runner._estimate_required_bars(cls, None), 120)
+        # Screening preset dataclass
+        yang = get_preset("yang_conservative")
+        self.assertEqual(self.runner._estimate_required_bars(cls, yang), 120)
+        self.assertEqual(self.runner._estimate_required_bars(cls, yang.to_dict()), 120)
+        # Explicit disable falls back to exit_ma_period
+        self.assertEqual(
+            self.runner._estimate_required_bars(
+                cls, {"use_min_ma_exit": False, "exit_ma_period": 10}
+            ),
+            10,
+        )
+
+    @patch.object(SimpleBacktestRunner, "_fetch_price_frame")
+    def test_single_yang_short_history_raises_valueerror_not_indexerror(self, mock_fetch):
+        """~80 bars used to IndexError inside Backtrader SMA; must fail cleanly."""
+        import pandas as pd
+        from quant_strategies.strategies import STRATEGY_MAP
+        from quant_strategies.strategy_params import get_preset
+
+        n = 80
+        idx = pd.bdate_range("2026-04-01", periods=n)
+        mock_fetch.return_value = pd.DataFrame(
+            {
+                "open": [10.0] * n,
+                "high": [10.5] * n,
+                "low": [9.5] * n,
+                "close": [10.2] * n,
+                "volume": [1_000_000] * n,
+            },
+            index=idx,
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            self.runner.run_backtest(
+                symbol="000001.SZ",
+                strategy_class=STRATEGY_MAP["single_yang"],
+                strategy_params=get_preset("yang_conservative"),
+                start_date="20260401",
+                end_date="20260731",
+                initial_cash=1_000_000,
+            )
+        self.assertIn("need at least 120 bars", str(ctx.exception))
+        self.assertIn("got 80", str(ctx.exception))
+
 
 if __name__ == '__main__':
     unittest.main()

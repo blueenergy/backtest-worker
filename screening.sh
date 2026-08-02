@@ -40,15 +40,15 @@ MIN_TRADES=3
 MIN_RETURN=0.03
 
 # Smart backtest window:
-# - First run or weekend: Use 360 days for comprehensive analysis
-# - Daily incremental: Use 60 days for quick updates
+# - Weekend: 360 days for comprehensive analysis
+# - Weekday: 250 days (must cover single_yang MA120 warmup)
 DAY_OF_WEEK=$(date +%u)  # 1=Monday, 7=Sunday
 if [ "$DAY_OF_WEEK" -ge 6 ]; then
     DAYS_BACK=360  # Weekend: Full scan
     echo "📅 Weekend mode: Using 360-day backtest window"
 else
-    DAYS_BACK=60   # Weekday: Quick update
-    echo "⚡ Daily mode: Using 60-day backtest window"
+    DAYS_BACK=250  # Weekday: enough trading bars for MA120
+    echo "⚡ Daily mode: Using 250-day backtest window"
 fi
 
 # Allow manual override via environment variable
