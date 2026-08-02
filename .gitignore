@@ -11,6 +11,11 @@ ENV/
 
 # Config with secrets
 config.json
+.env
+
+# Test reports
+pytest-report.xml
+.pytest_cache/
 
 # Cache
 cache/

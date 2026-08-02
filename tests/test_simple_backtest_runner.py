@@ -14,52 +14,42 @@ class TestSimpleBacktestRunner(unittest.TestCase):
         """Set up test fixtures before each test method."""
         self.runner = SimpleBacktestRunner()
         
-    @patch('worker.simple_backtest_runner.StockPriceDataAccess')
-    def test_run_backtest_basic(self, mock_data_access):
-        """Test basic backtest execution."""
-        # Import pandas for proper DataFrame handling
+    def test_run_backtest_basic(self):
+        """Test basic backtest execution against mocked bars."""
         import pandas as pd
-        
-        # Mock data access to return sample data
-        mock_df = pd.DataFrame({
-            'open': [100, 101, 102],
-            'high': [105, 106, 107],
-            'low': [95, 96, 97],
-            'close': [104, 105, 106],
-            'volume': [1000, 1100, 1200]
-        })
-        mock_df.index = pd.to_datetime(['2023-01-01', '2023-01-02', '2023-01-03'])
-        
-        mock_instance = Mock()
-        mock_instance.fetch_frame.return_value = mock_df
-        mock_data_access.return_value = mock_instance
-        
-        # Mock strategy class
-        from strategies import STRATEGY_MAP
-        strategy_class = STRATEGY_MAP.get('grid')  # Use grid as it's simpler
-        
-        if strategy_class:
-            try:
-                # Run backtest with mocked data
-                results = self.runner.run_backtest(
-                    symbol='TEST.SZ',
-                    strategy_class=strategy_class,
-                    start_date='20230101',
-                    end_date='20230103',
-                    initial_cash=100000
-                )
-                
-                # Verify results structure
-                self.assertIn('symbol', results)
-                self.assertIn('final_value', results)
-                self.assertIn('total_profit', results)
-                self.assertEqual(results['symbol'], 'TEST.SZ')
-            except ValueError as e:
-                # Skip test if data is not available in test environment
-                if "No data found" in str(e):
-                    print(f"Skipping test: {e}")
-                else:
-                    raise
+        from quant_strategies.strategies import STRATEGY_MAP
+
+        # Grid needs 50+ bars to pass the runner's pre-flight length check.
+        n_bars = 120
+        dates = pd.date_range(start='2023-01-01', periods=n_bars, freq='D')
+        mock_df = pd.DataFrame(
+            {
+                'open': [100 + i for i in range(n_bars)],
+                'high': [105 + i for i in range(n_bars)],
+                'low': [95 + i for i in range(n_bars)],
+                'close': [104 + i for i in range(n_bars)],
+                'volume': [1000 + i * 100 for i in range(n_bars)],
+            },
+            index=dates,
+        )
+
+        # setUp already built the runner, so patching the module attribute
+        # would come too late; swap the loader on the instance instead.
+        self.runner.data_loader = Mock()
+        self.runner.data_loader.fetch_frame.return_value = mock_df
+
+        results = self.runner.run_backtest(
+            symbol='TEST.SZ',
+            strategy_class=STRATEGY_MAP['grid'],
+            start_date='20230101',
+            end_date='20230430',
+            initial_cash=100000,
+        )
+
+        self.assertIn('metrics', results)
+        self.assertIn('trades', results)
+        self.assertIn('equity_curve', results)
+        self.runner.data_loader.fetch_frame.assert_called_once()
     
     def test_create_data_feed(self):
         """Test data feed creation."""

@@ -15,7 +15,7 @@ import pandas as pd
 import backtrader as bt
 from datetime import datetime
 
-from strategies import GridTradingStrategy
+from quant_strategies.strategies import GridTradingStrategy
 
 
 class GridStrategyBugRegression(unittest.TestCase):

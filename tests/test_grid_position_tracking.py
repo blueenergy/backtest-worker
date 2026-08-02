@@ -15,7 +15,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import backtrader as bt
 
-from strategies import GridTradingStrategy
+from quant_strategies.strategies import GridTradingStrategy
 
 
 class TestGridPositionTracking(unittest.TestCase):

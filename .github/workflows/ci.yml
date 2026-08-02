@@ -64,7 +64,7 @@ jobs:
           pip install -e ../quant-strategies
           grep -v '^-e ' requirements.txt > /tmp/backtest_requirements.txt
           pip install -r /tmp/backtest_requirements.txt
-          pip install pytest
+          pip install -r requirements-dev.txt
 
       - name: Compile worker modules
         working-directory: backtest-worker
@@ -72,19 +72,16 @@ jobs:
           python -m py_compile \
             worker/backtest_worker.py \
             worker/simple_backtest_runner.py \
+            worker/task_store.py \
             tests/test_backtest_worker.py \
             tests/test_simple_backtest_runner.py
 
-      - name: Run focused tests
+      - name: Run unit tests
         working-directory: backtest-worker
         env:
           PYTHONPATH: worker:../quant-strategies:.
         run: |
-          pytest -q \
-            tests/test_backtest_worker.py::test_config_loading \
-            tests/test_backtest_worker.py::test_worker_poll_tasks \
-            tests/test_integration.py::test_worker_deprecated_token_is_ignored \
-            tests/test_simple_backtest_runner.py::TestSimpleBacktestRunner::test_fetch_etf_frame
+          pytest -q -m "not integration" --junitxml=pytest-report.xml
 
   docker-build:
     name: Build & Push Arch Image

@@ -9,11 +9,13 @@ import sys
 import logging
 from pathlib import Path
 
+import pytest
+
 # Add worker to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from worker.simple_backtest_runner import SimpleBacktestRunner
-from strategies import STRATEGY_MAP, TurtleTradingStrategy, GridTradingStrategy
+from quant_strategies.strategies import STRATEGY_MAP, TurtleTradingStrategy, GridTradingStrategy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +52,7 @@ def test_runner_initialization():
     log.info("✅ SimpleBacktestRunner initialized successfully!")
 
 
+@pytest.mark.integration
 def test_backtest_with_grid():
     """Test running a simple backtest with Grid strategy."""
     log.info("\n" + "="*60)
@@ -113,6 +116,7 @@ def test_backtest_with_grid():
         raise
 
 
+@pytest.mark.integration
 def test_backtest_with_turtle():
     """Test running a simple backtest with Turtle strategy."""
     log.info("\n" + "="*60)
