@@ -1,15 +1,19 @@
 #!/bin/bash
 set -e
 
-# Install local editable packages if mounted
-if [ -d "/deps/data-access-lib" ]; then
-    echo "Installing data-access-lib..."
-    pip install --no-cache-dir -q -e /deps/data-access-lib
-fi
+# The image already installs both packages at build time. Reinstalling is only
+# needed when a dev bind-mount replaces /deps with a different source tree, and
+# it costs ~30s of cold start, which matters once replicas autoscale.
+if [ "${BACKTEST_REINSTALL_DEPS:-false}" = "true" ]; then
+    if [ -d "/deps/data-access-lib" ]; then
+        echo "Reinstalling data-access-lib from mount..."
+        pip install --no-cache-dir -q -e /deps/data-access-lib
+    fi
 
-if [ -d "/deps/quant-strategies" ]; then
-    echo "Installing quant-strategies..."
-    pip install --no-cache-dir -q -e /deps/quant-strategies
+    if [ -d "/deps/quant-strategies" ]; then
+        echo "Reinstalling quant-strategies from mount..."
+        pip install --no-cache-dir -q -e /deps/quant-strategies
+    fi
 fi
 
 BACKTEST_ROLE="${BACKTEST_ROLE:-worker}"
