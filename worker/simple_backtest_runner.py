@@ -47,6 +47,7 @@ _RESERVED_NON_STRATEGY_KEYS = frozenset({
 
 DEFAULT_ETF_TARGET_POSITION_PCT = 0.95
 
+from quant_strategies.min_bars import estimate_required_bars
 from stock_data_access import StockPriceDataAccess
 
 log = logging.getLogger(__name__)
@@ -291,91 +292,13 @@ class SimpleBacktestRunner:
         name_map = loader.fetch_names([symbol])
         return name_map.get(symbol, symbol)
 
-    # single_yang (and similar) build these when use_min_ma_exit=True
-    _MIN_MA_EXIT_PERIODS = (20, 30, 60, 120)
-
-    def _params_as_dict(self, strategy_params: Optional[Any]) -> Dict[str, Any]:
-        """Normalize dataclass / Mapping strategy params to a plain dict."""
-        if strategy_params is None:
-            return {}
-        if hasattr(strategy_params, "to_dict"):
-            try:
-                return dict(strategy_params.to_dict())
-            except Exception:
-                pass
-        if isinstance(strategy_params, dict):
-            return dict(strategy_params)
-        return {}
-
-    def _strategy_default_param_map(self, strategy_class: type) -> Dict[str, Any]:
-        """Read Backtrader strategy default params from the class MRO."""
-        defaults: Dict[str, Any] = {}
-        for klass in reversed(strategy_class.__mro__):
-            raw_defaults = klass.__dict__.get("params")
-            if raw_defaults is None:
-                continue
-            if isinstance(raw_defaults, (list, tuple)):
-                for item in raw_defaults:
-                    if isinstance(item, (list, tuple)) and len(item) >= 2:
-                        defaults[str(item[0])] = item[1]
-                continue
-            if isinstance(raw_defaults, dict):
-                defaults.update(raw_defaults)
-                continue
-            # Backtrader replaces the tuple with AutoInfoClass
-            getpairs = getattr(raw_defaults, "_getpairs", None)
-            if callable(getpairs):
-                try:
-                    pairs = getpairs()
-                    if isinstance(pairs, dict):
-                        defaults.update(pairs)
-                except Exception:
-                    pass
-        return defaults
-
     def _estimate_required_bars(self, strategy_class: type, strategy_params: Optional[Dict[str, Any]] = None) -> int:
-        """Estimate minimum required bars for a strategy to initialize indicators safely.
+        """Minimum bars this strategy needs before its indicators are usable.
 
-        Heuristics used:
-        - If strategy_class has attribute `min_data_required` use it.
-        - If use_min_ma_exit (params or strategy default): longest of MA20/30/60/120.
-        - Else max of known MA period keys (at least that many bars to avoid
-          Backtrader IndexError on SMA once()).
-        - Fallback to conservative default of 50 bars.
+        Shared with the API, which runs the same estimate at submit time to
+        reject date ranges that cannot possibly produce enough bars.
         """
-        try:
-            # 1. Class-level hint
-            if hasattr(strategy_class, 'min_data_required'):
-                val = getattr(strategy_class, 'min_data_required')
-                if isinstance(val, int) and val > 0:
-                    return val
-
-            # 2. Merge explicit params over strategy defaults (dataclass-safe)
-            params = {
-                **self._strategy_default_param_map(strategy_class),
-                **self._params_as_dict(strategy_params),
-            }
-
-            # Multi-MA exit (single_yang): MA20/30/60/120 — need >= 120 bars
-            if params.get('use_min_ma_exit'):
-                return max(self._MIN_MA_EXIT_PERIODS)
-
-            candidates = []
-            for key in ('exit_ma_period', 'ma_period', 'short_ma', 'long_ma',
-                        'entry_ma_period', 'entry_window', 'exit_window'):
-                v = params.get(key)
-                if isinstance(v, int) and v > 0:
-                    candidates.append(v)
-                elif isinstance(v, float) and v > 0 and float(v).is_integer():
-                    candidates.append(int(v))
-
-            if candidates:
-                return max(candidates)
-
-            # 3. Fallback default
-            return 50
-        except Exception:
-            return 50
+        return estimate_required_bars(strategy_class, strategy_params)
 
     def _strategy_param_names(self, strategy_class: type) -> Set[str]:
         """Collect declared Backtrader param names from the strategy class MRO."""
