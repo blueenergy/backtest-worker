@@ -62,6 +62,29 @@ def _validate_task_dates(start_date: str, end_date: str) -> None:
         raise ValueError(f"Invalid or missing end_date: {end_date or '<empty>'}")
 
 
+def _mask_mongo_uri(uri: str) -> str:
+    """Mask credentials before logging a MongoDB URI.
+
+    Anything unrecognised is redacted rather than passed through: this runs on
+    the startup log path, so it must neither leak a password nor raise.
+    """
+    if not uri:
+        return ""
+    if not isinstance(uri, str):
+        return "***"
+    for scheme in ("mongodb+srv", "mongodb"):
+        prefix = f"{scheme}://"
+        if uri.startswith(prefix):
+            rest = uri[len(prefix) :]
+            break
+    else:
+        return "***"
+    if "@" not in rest:
+        return uri
+    _, host_and_path = rest.rsplit("@", 1)
+    return f"{scheme}://***:***@{host_and_path}"
+
+
 def touch_health_file() -> None:
     try:
         HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -246,7 +269,7 @@ class BacktestWorkerService:
         self.running = True
         self.startup()
         log.info("Starting backtest worker: %s", self.worker_id)
-        log.info("MongoDB: %s/%s", self.task_store.mongo_uri, self.task_store.db_name)
+        log.info("MongoDB: %s/%s", _mask_mongo_uri(self.task_store.mongo_uri), self.task_store.db_name)
         log.info("Poll interval: %ss", self.poll_interval)
 
         while self.running:

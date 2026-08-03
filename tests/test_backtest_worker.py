@@ -21,7 +21,61 @@ import backtrader as bt
 sys.path.insert(0, str(Path(__file__).parent))
 
 from worker.simple_backtest_runner import SimpleBacktestRunner
-from worker.backtest_worker import BacktestWorkerService, load_config
+from worker.backtest_worker import BacktestWorkerService, _mask_mongo_uri, load_config
+
+
+def test_mask_mongo_uri_hides_password():
+    masked = _mask_mongo_uri(
+        "mongodb://admin:s3cr3t@10.0.0.1:27017/?authSource=admin&maxPoolSize=20"
+    )
+    assert "s3cr3t" not in masked
+    assert "admin:s3cr3t" not in masked
+    # Everything needed to identify the target must survive.
+    assert masked == "mongodb://***:***@10.0.0.1:27017/?authSource=admin&maxPoolSize=20"
+
+
+def test_mask_mongo_uri_handles_password_containing_at_sign():
+    masked = _mask_mongo_uri("mongodb://admin:p@ss@host:27017/db")
+    assert "p@ss" not in masked
+    assert masked == "mongodb://***:***@host:27017/db"
+
+
+def test_mask_mongo_uri_passes_through_uri_without_credentials():
+    uri = "mongodb://localhost:27017"
+    assert _mask_mongo_uri(uri) == uri
+
+
+def test_mask_mongo_uri_supports_srv_scheme():
+    masked = _mask_mongo_uri("mongodb+srv://user:pw@cluster.example.net/db")
+    assert "pw" not in masked
+    assert masked == "mongodb+srv://***:***@cluster.example.net/db"
+
+
+def test_mask_mongo_uri_rejects_unknown_scheme():
+    assert _mask_mongo_uri("postgres://user:pw@host/db") == "***"
+    assert _mask_mongo_uri("") == ""
+
+
+def test_mask_mongo_uri_redacts_non_string_instead_of_raising():
+    """Runs on the startup log path, so it must not take the worker down."""
+    assert _mask_mongo_uri(Mock()) == "***"
+
+
+def test_worker_startup_log_does_not_leak_password(caplog):
+    store = Mock()
+    store.mongo_uri = "mongodb://admin:s3cr3t@10.0.0.1:27017/?authSource=admin"
+    store.db_name = "finance"
+    store.requeue_own_orphans.return_value = 0
+    store.reset_expired_jobs.return_value = 0
+
+    worker = BacktestWorkerService(worker_id="w1", poll_interval=0, task_store=store)
+    worker.stop(draining=True)
+
+    with caplog.at_level("INFO"):
+        worker.run()
+
+    assert "s3cr3t" not in caplog.text
+    assert "***:***@10.0.0.1:27017" in caplog.text
 
 
 def test_simple_runner_initialization():
