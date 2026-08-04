@@ -17,12 +17,24 @@ from worker.simple_backtest_runner import SimpleBacktestRunner
 from worker.backtest_worker import BacktestWorkerService
 
 
+def _mock_adjusted_df(mock_df):
+    frame = mock_df.copy()
+    frame["pre_close"] = frame["close"].shift(1).fillna(frame["close"])
+    frame["adj_factor"] = 1.0
+    frame.attrs = {
+        "adj_degraded": False,
+        "adj_coverage": 1.0,
+        "adj_bfilled": False,
+    }
+    return frame
+
+
 def test_end_to_end_backtest_flow():
     """Test the complete backtest flow from runner to results formatting."""
     runner = SimpleBacktestRunner()
     
     # Mock the data loading to avoid actual database calls
-    with patch.object(runner.data_loader, 'fetch_frame') as mock_fetch:
+    with patch.object(runner.adj_loader, 'load_adjusted_ohlc') as mock_load:
         # Create mock data
         dates = pd.date_range(start='2023-01-01', periods=60, freq='D')
         mock_df = pd.DataFrame({
@@ -33,7 +45,7 @@ def test_end_to_end_backtest_flow():
             'volume': [1000 + i * 10 for i in range(60)]
         }, index=dates)
         
-        mock_fetch.return_value = mock_df
+        mock_load.return_value = _mock_adjusted_df(mock_df)
         
         # Run backtest with mock data
         results = runner.run_backtest(
@@ -60,7 +72,7 @@ def test_worker_with_real_strategies():
     # Test with Turtle strategy
     runner = SimpleBacktestRunner()
     
-    with patch.object(runner.data_loader, 'fetch_frame') as mock_fetch:
+    with patch.object(runner.adj_loader, 'load_adjusted_ohlc') as mock_load:
         # Create more realistic data for Turtle strategy
         dates = pd.date_range(start='2023-01-01', periods=60, freq='D')  # More data for Turtle indicators
         mock_df = pd.DataFrame({
@@ -71,7 +83,7 @@ def test_worker_with_real_strategies():
             'volume': [100000] * 60
         }, index=dates)
         
-        mock_fetch.return_value = mock_df
+        mock_load.return_value = _mock_adjusted_df(mock_df)
         
         # Test Turtle strategy
         results = runner.run_backtest(

@@ -49,8 +49,15 @@ DEFAULT_ETF_TARGET_POSITION_PCT = 0.95
 
 from quant_strategies.min_bars import estimate_required_bars
 from stock_data_access import StockPriceDataAccess
+from stock_data_access.prices import AdjustedPriceDataAccess
+
+from worker.ashare_broker import AShareBroker, make_ashare_feed
+from worker.china_costs import AShareCommission
 
 log = logging.getLogger(__name__)
+
+# Fail backtests when adjustment factors are missing or gap-filled.
+MIN_ADJ_COVERAGE = 1.0
 
 
 class SimpleBacktestRunner:
@@ -58,6 +65,8 @@ class SimpleBacktestRunner:
     
     def __init__(self):
         self.data_loader = StockPriceDataAccess(minute=False)
+        self.adj_loader = AdjustedPriceDataAccess()
+        self._last_price_frame = None
     
     def run_backtest(
         self,
@@ -144,19 +153,16 @@ class SimpleBacktestRunner:
 
             # 2. Setup Backtrader
             cerebro = bt.Cerebro()
+            cerebro.broker = AShareBroker()
             cerebro.broker.setcash(initial_cash)
 
-            # Add custom commission scheme like stock-execution-system
-            from backtrader import CommInfoBase
-
-            # Define custom commission scheme
-            class CustomCommissionScheme(CommInfoBase):
-                params = (
-                    ("commission", 0.0001),  # 佣金万分之一
-                    ("stamp_tax", 0.0005),  # 印花税万分之五
-                )
-
-            cerebro.broker.addcommissioninfo(CustomCommissionScheme())
+            cerebro.broker.addcommissioninfo(AShareCommission())
+            cerebro.broker.set_slippage_perc(
+                0.001,
+                slip_open=True,
+                slip_match=True,
+                slip_out=False,
+            )
 
             # Add worker_mode flag for backtest context
             safe_params['worker_mode'] = 'backtest'
@@ -170,9 +176,11 @@ class SimpleBacktestRunner:
             cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
             cerebro.addanalyzer(bt.analyzers.Returns, _name="returns")
             cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name="sharpe", riskfreerate=0.0)
+            cerebro.addanalyzer(bt.analyzers.SQN, _name="sqn")
             
             # 5. Create data feed from DataFrame
-            feed = self._create_data_feed(df, symbol, asset_type=asset_type)
+            stock_name = self._fetch_symbol_name(symbol, asset_type=asset_type)
+            feed = self._create_data_feed(df, symbol, asset_type=asset_type, stock_name=stock_name)
             cerebro.adddata(feed)
             
             # 6. Run backtest
@@ -186,7 +194,10 @@ class SimpleBacktestRunner:
             strategy = strategies[0]
             
             # 6. Collect results
-            results = self._collect_results(cerebro, strategy, symbol, start_date, end_date, initial_cash)
+            results = self._collect_results(
+                cerebro, strategy, symbol, start_date, end_date, initial_cash,
+                price_frame=df,
+            )
             results["asset_type"] = asset_type
             
             # Log completion with metrics
@@ -202,7 +213,26 @@ class SimpleBacktestRunner:
         """Fetch OHLCV data for stocks or ETFs."""
         if asset_type == "etf":
             return self._fetch_etf_frame(symbol, start_date, end_date)
-        return self.data_loader.fetch_frame([symbol], start_date, end_date)
+
+        df = self.adj_loader.load_adjusted_ohlc(symbol, start_date, end_date, adjust="hfq")
+        if df.empty:
+            return df
+
+        degraded = bool(df.attrs.get("adj_degraded", False))
+        coverage = float(df.attrs.get("adj_coverage", 0.0))
+        bfilled = bool(df.attrs.get("adj_bfilled", False))
+        if degraded or coverage < MIN_ADJ_COVERAGE or bfilled:
+            raise ValueError(
+                f"Adjusted price data unavailable for {symbol} "
+                f"({start_date}-{end_date}): adj_degraded={degraded}, "
+                f"adj_coverage={coverage:.4f}, adj_bfilled={bfilled}. "
+                "Possible causes: missing stock_adj_factor rows for this symbol/date "
+                "range, or symbol format mismatch between volume_price and "
+                "stock_adj_factor."
+            )
+
+        self._last_price_frame = df
+        return df[["open", "high", "low", "close", "pre_close", "volume", "adj_factor"]].copy()
 
     def _fetch_etf_frame(self, symbol: str, start_date: str, end_date: str):
         """Fetch ETF daily bars from quant_data.etf_daily."""
@@ -235,49 +265,28 @@ class SimpleBacktestRunner:
         df["trade_date"] = pd.to_datetime(df["trade_date"], format="mixed")
         return df.set_index("trade_date").sort_index()[["open", "high", "low", "close", "volume"]]
 
-    def _create_data_feed(self, df, symbol, asset_type: str = "stock"):
+    def _create_data_feed(self, df, symbol, asset_type: str = "stock", stock_name: str = ""):
         """Create a Backtrader PandasData feed from DataFrame."""
         import pandas as pd
-        import backtrader as bt
-        
-        # Ensure DataFrame has proper index and columns
+
         if not isinstance(df.index, pd.DatetimeIndex):
+            df = df.copy()
             df.index = pd.to_datetime(df.index, format='%Y%m%d')
-        
-        # Rename columns to match Backtrader expectations
-        df_copy = df.copy()
-        columns_map = {
-            'open': 'open',
-            'high': 'high',
-            'low': 'low',
-            'close': 'close',
-            'volume': 'volume',
-        }
-        
-        # Map available columns
-        for src, dst in columns_map.items():
-            if src in df_copy.columns and src != dst:
-                df_copy[dst] = df_copy[src]
-        
-        # Create named data feed with attributes like stock-execution-system
-        class NamedPandasData(bt.feeds.PandasData):
-            params = ()
-        
-        data_df = df_copy.copy()
-        dt_index = pd.to_datetime(data_df.index)
-        data_df = data_df.set_index(dt_index).sort_index()
-        data = NamedPandasData(dataname=data_df)
-        data.symbol = symbol
-        data._name = symbol
-        
-        # Try to get display name from the matching reference collection.
-        try:
-            stock_name = self._fetch_symbol_name(symbol, asset_type)
-            data.stock_name = stock_name
-        except Exception:
-            data.stock_name = symbol
-        
-        return data
+
+        if asset_type == "etf":
+            class NamedPandasData(bt.feeds.PandasData):
+                params = ()
+
+            data_df = df.copy()
+            dt_index = pd.to_datetime(data_df.index)
+            data_df = data_df.set_index(dt_index).sort_index()
+            data = NamedPandasData(dataname=data_df)
+            data.symbol = symbol
+            data._name = symbol
+            data.stock_name = stock_name or symbol
+            return data
+
+        return make_ashare_feed(df, symbol, stock_name=stock_name or symbol)
 
     def _fetch_symbol_name(self, symbol: str, asset_type: str = "stock") -> str:
         if asset_type == "etf":
@@ -438,7 +447,16 @@ class SimpleBacktestRunner:
 
         return coerced
     
-    def _collect_results(self, cerebro, strategy, symbol, start_date, end_date, initial_cash) -> Dict[str, Any]:
+    def _collect_results(
+        self,
+        cerebro,
+        strategy,
+        symbol,
+        start_date,
+        end_date,
+        initial_cash,
+        price_frame=None,
+    ) -> Dict[str, Any]:
         """Collect backtest results from Backtrader in API-compatible format.
         
         Returns structure matching BacktestResultReport:
@@ -453,7 +471,7 @@ class SimpleBacktestRunner:
         profit_pct = (profit / initial_cash * 100) if initial_cash > 0 else 0
         
         # Extract performance metrics from analyzers
-        metrics = self._extract_metrics(strategy, profit_pct)
+        metrics = self._extract_metrics(strategy, profit_pct, price_frame=price_frame)
         metrics.update(self._extract_invested_metrics(strategy, profit, initial_cash))
         
         # Extract and format trades for API
@@ -471,7 +489,7 @@ class SimpleBacktestRunner:
         
         return results
     
-    def _extract_metrics(self, strategy, total_return_pct) -> Dict[str, Any]:
+    def _extract_metrics(self, strategy, total_return_pct, price_frame=None) -> Dict[str, Any]:
         """Extract performance metrics matching BacktestResultMetrics schema.
         
         Note: Returns metrics in decimal format (0-1 range) for frontend display.
@@ -482,7 +500,14 @@ class SimpleBacktestRunner:
             'sharpe_ratio': None,
             'max_drawdown': None,
             'win_rate': None,
-            'total_trades': None
+            'total_trades': None,
+            'calmar_ratio': None,
+            'sortino_ratio': None,
+            'sqn': None,
+            'ulcer_index': None,
+            'max_drawdown_len': None,
+            'benchmark_return': None,
+            'excess_return': None,
         }
         
         if not hasattr(strategy, 'analyzers'):
@@ -508,15 +533,27 @@ class SimpleBacktestRunner:
             metrics['sharpe_ratio'] = sharpe_ratio if sharpe_ratio is not None else 0.0
         except Exception:
             metrics['sharpe_ratio'] = 0.0
+
+        try:
+            sqn_analyzer = strategy.analyzers.getbyname('sqn')
+            sqn_data = sqn_analyzer.get_analysis()
+            metrics['sqn'] = sqn_data.get('sqn', None)
+        except Exception:
+            metrics['sqn'] = None
         
         # Extract Max Drawdown (Backtrader returns percentage value like 3.69 for 3.69%)
         try:
             dd_analyzer = strategy.analyzers.getbyname('drawdown')
             dd_data = dd_analyzer.get_analysis()
             dd_value = dd_data.get('max', {}).get('drawdown', 0)
+            dd_len = dd_data.get('max', {}).get('len', 0)
             log.info(f"[DEBUG] Drawdown analyzer value: {dd_value}")
             # Backtrader returns percentage (e.g., 3.69 for 3.69%), convert to decimal (0.0369)
             metrics['max_drawdown'] = dd_value / 100
+            metrics['max_drawdown_len'] = dd_len
+            annual_return = metrics.get('total_return', 0.0) or 0.0
+            if metrics['max_drawdown'] and metrics['max_drawdown'] > 0:
+                metrics['calmar_ratio'] = annual_return / metrics['max_drawdown']
         except Exception as e:
             log.warning(f"[DEBUG] Failed to extract drawdown: {e}")
             pass
@@ -536,8 +573,70 @@ class SimpleBacktestRunner:
         except Exception as e:
             log.warning(f"[DEBUG] Failed to extract trade stats: {e}")
             pass
+
+        equity_history = getattr(strategy, 'equity_history', []) or []
+        if equity_history:
+            metrics.update(self._equity_derived_metrics(equity_history))
+
+        if price_frame is not None:
+            bench = self._benchmark_return(price_frame)
+            metrics['benchmark_return'] = bench
+            strategy_return = metrics.get('total_return')
+            if bench is not None and strategy_return is not None:
+                metrics['excess_return'] = strategy_return - bench
         
         return metrics
+
+    def _equity_derived_metrics(self, equity_history) -> Dict[str, Any]:
+        """Compute Sortino and Ulcer Index from equity history."""
+        import math
+
+        values = [float(v) for _, v in equity_history if v is not None]
+        if len(values) < 2:
+            return {'sortino_ratio': None, 'ulcer_index': None}
+
+        returns = []
+        for prev, curr in zip(values[:-1], values[1:]):
+            if prev > 0:
+                returns.append((curr / prev) - 1.0)
+
+        if not returns:
+            return {'sortino_ratio': None, 'ulcer_index': None}
+
+        mean_ret = sum(returns) / len(returns)
+        downside = [r for r in returns if r < 0]
+        if downside:
+            downside_dev = math.sqrt(sum(r * r for r in downside) / len(downside))
+            sortino = (mean_ret / downside_dev) * math.sqrt(252) if downside_dev > 0 else None
+        else:
+            sortino = None
+
+        peak = values[0]
+        squared_drawdowns = []
+        for value in values:
+            peak = max(peak, value)
+            if peak > 0:
+                dd_pct = (peak - value) / peak * 100.0
+                squared_drawdowns.append(dd_pct * dd_pct)
+        ulcer = math.sqrt(sum(squared_drawdowns) / len(squared_drawdowns)) if squared_drawdowns else None
+
+        return {'sortino_ratio': sortino, 'ulcer_index': ulcer}
+
+    def _benchmark_return(self, price_frame) -> Optional[float]:
+        """Buy-and-hold return over the loaded price window."""
+        try:
+            closes = price_frame["close"]
+            if hasattr(closes, "iloc"):
+                first = float(closes.iloc[0])
+                last = float(closes.iloc[-1])
+            else:
+                first = float(closes[0])
+                last = float(closes[-1])
+            if first <= 0:
+                return None
+            return (last / first) - 1.0
+        except Exception:
+            return None
 
     def _extract_invested_metrics(self, strategy, total_profit: float, initial_cash: float) -> Dict[str, Any]:
         """Calculate capital deployment metrics from the strategy trade log."""

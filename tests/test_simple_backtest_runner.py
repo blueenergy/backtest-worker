@@ -35,8 +35,16 @@ class TestSimpleBacktestRunner(unittest.TestCase):
 
         # setUp already built the runner, so patching the module attribute
         # would come too late; swap the loader on the instance instead.
-        self.runner.data_loader = Mock()
-        self.runner.data_loader.fetch_frame.return_value = mock_df
+        mock_df = mock_df.copy()
+        mock_df["pre_close"] = mock_df["close"].shift(1).fillna(mock_df["close"])
+        mock_df["adj_factor"] = 1.0
+        mock_df.attrs = {
+            "adj_degraded": False,
+            "adj_coverage": 1.0,
+            "adj_bfilled": False,
+        }
+        self.runner.adj_loader = Mock()
+        self.runner.adj_loader.load_adjusted_ohlc.return_value = mock_df
 
         results = self.runner.run_backtest(
             symbol='TEST.SZ',
@@ -49,7 +57,7 @@ class TestSimpleBacktestRunner(unittest.TestCase):
         self.assertIn('metrics', results)
         self.assertIn('trades', results)
         self.assertIn('equity_curve', results)
-        self.runner.data_loader.fetch_frame.assert_called_once()
+        self.runner.adj_loader.load_adjusted_ohlc.assert_called_once()
     
     def test_create_data_feed(self):
         """Test data feed creation."""
@@ -245,6 +253,39 @@ class TestSimpleBacktestRunner(unittest.TestCase):
             )
         self.assertIn("need at least 120 bars", str(ctx.exception))
         self.assertIn("got 80", str(ctx.exception))
+
+    def test_adj_degraded_raises(self):
+        import pandas as pd
+        from quant_strategies.strategies import STRATEGY_MAP
+
+        dates = pd.date_range(start='2023-01-01', periods=60, freq='D')
+        mock_df = pd.DataFrame(
+            {
+                'open': [100] * 60,
+                'high': [101] * 60,
+                'low': [99] * 60,
+                'close': [100] * 60,
+                'volume': [1000] * 60,
+            },
+            index=dates,
+        )
+        mock_df.attrs = {
+            "adj_degraded": True,
+            "adj_coverage": 0.0,
+            "adj_bfilled": False,
+        }
+        self.runner.adj_loader = Mock()
+        self.runner.adj_loader.load_adjusted_ohlc.return_value = mock_df
+
+        with self.assertRaises(ValueError) as ctx:
+            self.runner.run_backtest(
+                symbol='TEST.SZ',
+                strategy_class=STRATEGY_MAP['grid'],
+                start_date='20230101',
+                end_date='20230301',
+                initial_cash=100000,
+            )
+        self.assertIn("adj_degraded", str(ctx.exception))
 
 
 if __name__ == '__main__':
