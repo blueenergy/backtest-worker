@@ -36,6 +36,7 @@ _RESERVED_NON_STRATEGY_KEYS = frozenset({
     "symbol",
     "task_id",
     "user_id",
+    "index_symbol",
     "stock_name",
     "status",
     "worker_id",
@@ -46,6 +47,8 @@ _RESERVED_NON_STRATEGY_KEYS = frozenset({
 })
 
 DEFAULT_ETF_TARGET_POSITION_PCT = 0.95
+DEFAULT_INDEX_SYMBOL = "000300.SH"
+_INDEX_STRATEGY_PREFIX = "IndexEnhanced"
 
 from quant_strategies.min_bars import estimate_required_bars
 from stock_data_access import StockPriceDataAccess
@@ -67,6 +70,10 @@ class SimpleBacktestRunner:
         self.data_loader = StockPriceDataAccess(minute=False)
         self.adj_loader = AdjustedPriceDataAccess()
         self._last_price_frame = None
+
+    @staticmethod
+    def _strategy_needs_index_feed(strategy_class: type) -> bool:
+        return strategy_class.__name__.startswith(_INDEX_STRATEGY_PREFIX)
     
     def run_backtest(
         self,
@@ -143,6 +150,11 @@ class SimpleBacktestRunner:
             safe_params = self._coerce_params(strategy_class, safe_params)
             safe_params = self._sanitize_params(strategy_class, safe_params)
 
+            index_symbol = (
+                safe_params.pop("index_symbol", None)
+                or DEFAULT_INDEX_SYMBOL
+            )
+
             # Quick pre-check: estimate minimum required bars from strategy params/class
             min_required = self._estimate_required_bars(strategy_class, safe_params)
             if n_bars < min_required:
@@ -182,6 +194,21 @@ class SimpleBacktestRunner:
             stock_name = self._fetch_symbol_name(symbol, asset_type=asset_type)
             feed = self._create_data_feed(df, symbol, asset_type=asset_type, stock_name=stock_name)
             cerebro.adddata(feed)
+
+            if self._strategy_needs_index_feed(strategy_class):
+                index_df = self._fetch_index_frame(index_symbol, start_date, end_date)
+                if index_df is not None and not index_df.empty:
+                    index_feed = self._create_data_feed(
+                        index_df, index_symbol, asset_type="index", stock_name=index_symbol
+                    )
+                    cerebro.adddata(index_feed)
+                    log.info("Added index feed %s (%d bars) for %s", index_symbol, len(index_df), strategy_class.__name__)
+                else:
+                    log.warning(
+                        "Index feed unavailable for %s; %s runs without index filter",
+                        index_symbol,
+                        strategy_class.__name__,
+                    )
             
             # 6. Run backtest
             log.info("Running backtest...")
@@ -265,6 +292,39 @@ class SimpleBacktestRunner:
         df["trade_date"] = pd.to_datetime(df["trade_date"], format="mixed")
         return df.set_index("trade_date").sort_index()[["open", "high", "low", "close", "volume"]]
 
+    def _fetch_index_frame(self, symbol: str, start_date: str, end_date: str):
+        """Fetch index OHLCV aligned for IndexEnhanced* strategies."""
+        import pandas as pd
+        from stock_data_access.mongo_context import get_db
+
+        cursor = get_db()["index_prices"].find(
+            {
+                "ts_code": symbol,
+                "trade_date": {"$gte": start_date, "$lte": end_date},
+            },
+            {
+                "_id": 0,
+                "trade_date": 1,
+                "open": 1,
+                "high": 1,
+                "low": 1,
+                "close": 1,
+                "vol": 1,
+                "volume": 1,
+            },
+        ).sort("trade_date", 1)
+        docs = list(cursor)
+        if not docs:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(docs)
+        df["volume"] = df.get("volume", df.get("vol", 0))
+        df["trade_date"] = pd.to_datetime(df["trade_date"], format="mixed")
+        for col in ("open", "high", "low", "close"):
+            if col not in df.columns:
+                df[col] = df["close"]
+        return df.set_index("trade_date").sort_index()[["open", "high", "low", "close", "volume"]]
+
     def _create_data_feed(self, df, symbol, asset_type: str = "stock", stock_name: str = ""):
         """Create a Backtrader PandasData feed from DataFrame."""
         import pandas as pd
@@ -273,7 +333,7 @@ class SimpleBacktestRunner:
             df = df.copy()
             df.index = pd.to_datetime(df.index, format='%Y%m%d')
 
-        if asset_type == "etf":
+        if asset_type in ("etf", "index"):
             class NamedPandasData(bt.feeds.PandasData):
                 params = ()
 
