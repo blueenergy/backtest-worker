@@ -119,7 +119,7 @@ class MongoBacktestTaskStore:
         self.mongo_uri = mongo_uri or os.getenv("MONGO_URI", "mongodb://localhost:27017")
         self.db_name = db_name or os.getenv("BACKTEST_DB_NAME") or os.getenv("DB_NAME") or "finance"
         self._client = None if db is not None else MongoClient(self.mongo_uri)
-        self.db = db or self._client[self.db_name]
+        self.db = db if db is not None else self._client[self.db_name]
         self.backtest_tasks = self.db["backtest_tasks"]
         self.backtest_results = self.db["backtest_results"]
         self.worker_status = self.db["worker_status"]
