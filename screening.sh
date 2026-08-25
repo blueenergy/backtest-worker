@@ -34,10 +34,10 @@ fi
 echo "============================================="
 echo ""
 
-# Configuration
-MIN_WIN_RATE=0.50
-MIN_TRADES=3
-MIN_RETURN=0.03
+# Configuration (env-overridable; defaults match production thresholds)
+MIN_WIN_RATE=${SCREENING_MIN_WIN_RATE:-0.50}
+MIN_TRADES=${SCREENING_MIN_TRADES:-3}
+MIN_RETURN=${SCREENING_MIN_RETURN:-0.03}
 
 # Smart backtest window:
 # - Weekend: 360 days for comprehensive analysis

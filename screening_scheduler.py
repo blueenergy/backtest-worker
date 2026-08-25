@@ -31,6 +31,14 @@ MANUAL_RUN_AT = os.environ.get("SCREENING_RUN_AT", "")
 HOLDER_ID = os.environ.get("BACKTEST_WORKER_ID", f"screening_{os.getenv('HOSTNAME', 'local')}")
 LOCK_TTL_SECONDS = max(300, int(os.environ.get("SCREENING_LOCK_TTL_SECONDS", "7200")))
 
+# Performance thresholds control the `qualified` flag on pool docs (Plan B);
+# they never block writes. Env-overridable so production tuning needs no image
+# rebuild — keep in sync with the argparse defaults in daily_full_market_screening.py.
+# Stored as strings and passed verbatim so values like "0.50" survive round-tripping.
+SCREENING_MIN_WIN_RATE = os.environ.get("SCREENING_MIN_WIN_RATE", "0.50")
+SCREENING_MIN_TRADES = os.environ.get("SCREENING_MIN_TRADES", "3")
+SCREENING_MIN_RETURN = os.environ.get("SCREENING_MIN_RETURN", "0.03")
+
 PRESETS = {
     "conservative": [
         ("turtle", "turtle_conservative"),
@@ -159,11 +167,11 @@ def run_screening(days_back: int) -> None:
                 "--initial-cash",
                 "1000000",
                 "--min-win-rate",
-                "0.50",
+                SCREENING_MIN_WIN_RATE,
                 "--min-trades",
-                "3",
+                SCREENING_MIN_TRADES,
                 "--min-return",
-                "0.03",
+                SCREENING_MIN_RETURN,
                 "--log-level",
                 "INFO",
             ]
