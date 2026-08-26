@@ -37,3 +37,48 @@ def test_manual_days_back_overrides_auto_window():
         hour, minute, days_back = sched.get_schedule()
     assert (hour, minute) == (9, 15)
     assert days_back == 400
+
+
+def test_run_screening_passes_production_thresholds(monkeypatch):
+    monkeypatch.setattr(sched, "acquire_screening_lock", lambda: True)
+    monkeypatch.setattr(sched, "release_screening_lock", lambda: None)
+    monkeypatch.setattr(sched, "get_tasks", lambda: [("hidden_dragon", "dragon_conservative")])
+    calls = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            calls.append(cmd)
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(sched.subprocess, "Popen", FakePopen)
+    sched.run_screening(180)
+    cmd = calls[0]
+    assert "--min-win-rate" in cmd and "0.50" in cmd
+    assert "--min-trades" in cmd and "3" in cmd
+    assert "--min-return" in cmd and "0.03" in cmd
+
+
+def test_run_screening_env_thresholds_override(monkeypatch):
+    monkeypatch.setattr(sched, "acquire_screening_lock", lambda: True)
+    monkeypatch.setattr(sched, "release_screening_lock", lambda: None)
+    monkeypatch.setattr(sched, "get_tasks", lambda: [("hidden_dragon", "dragon_conservative")])
+    calls = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            calls.append(cmd)
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(sched, "SCREENING_MIN_WIN_RATE", "0.40")
+    monkeypatch.setattr(sched, "SCREENING_MIN_TRADES", "2")
+    monkeypatch.setattr(sched, "SCREENING_MIN_RETURN", "0.02")
+    monkeypatch.setattr(sched.subprocess, "Popen", FakePopen)
+    sched.run_screening(180)
+    cmd = calls[0]
+    assert "0.40" in cmd
+    assert "2" in cmd
+    assert "0.02" in cmd
