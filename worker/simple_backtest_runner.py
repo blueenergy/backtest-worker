@@ -56,6 +56,7 @@ from stock_data_access.prices import AdjustedPriceDataAccess
 
 from worker.ashare_broker import AShareBroker, make_ashare_feed
 from worker.china_costs import AShareCommission
+from worker.regime_filter import load_regime_filter, wrap_strategy_with_regime
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ class SimpleBacktestRunner:
         initial_cash: float = 1_000_000,
         preset_name: Optional[str] = None,
         asset_type: str = "stock",
+        regime: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Run a backtest with given parameters.
@@ -97,7 +99,11 @@ class SimpleBacktestRunner:
             end_date: End date (YYYYMMDD)
             initial_cash: Initial cash
             preset_name: Optional preset name (e.g., 'turtle_standard', 'grid_default')
-            
+            regime: Optional bull/bear gate config:
+                ``{"regime_cash": bool, "regime_index": "000300.SH",
+                "regime_rule": "k_slow_anchor"}``. When enabled, buys are
+                blocked outside a bull label and a held position is closed.
+
         Returns:
             Dictionary with backtest results
         """
@@ -179,8 +185,28 @@ class SimpleBacktestRunner:
             # Add worker_mode flag for backtest context
             safe_params['worker_mode'] = 'backtest'
 
+            regime_config = dict(regime or {})
+            strategy_for_cerebro = strategy_class
+            if bool(regime_config.get("regime_cash")):
+                regime_filter = load_regime_filter(
+                    index_symbol=str(regime_config.get("regime_index") or ""),
+                    start_date=start_date,
+                    end_date=end_date,
+                    rule=regime_config.get("regime_rule"),
+                )
+                log.info(
+                    "Regime filter enabled: index=%s rule=%s bars=%s distribution=%s",
+                    regime_filter.index_symbol,
+                    regime_filter.rule,
+                    len(regime_filter),
+                    regime_filter.distribution,
+                )
+                strategy_for_cerebro = wrap_strategy_with_regime(
+                    strategy_class, regime_filter
+                )
+
             log.info(f"Final params passed to strategy: {safe_params}")
-            cerebro.addstrategy(strategy_class, **safe_params)
+            cerebro.addstrategy(strategy_for_cerebro, **safe_params)
             
             # 4. Add analyzers to capture trade and performance data
             cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="tradeanalyzer")

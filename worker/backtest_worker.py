@@ -155,11 +155,17 @@ class BacktestWorkerService:
         strategy_params = task.get("strategy_params", {})
         preset_name = task.get("preset")
         initial_cash = task.get("initial_cash", 1000000)
+        regime = {
+            "regime_cash": bool(task.get("regime_cash")),
+            "regime_index": task.get("regime_index"),
+            "regime_rule": task.get("regime_rule"),
+        }
 
         log.info("Executing backtest for %s (%s, %s to %s)", symbol, asset_type, start_date, end_date)
         log.info("Strategy: %s, Params: %s", strategy_key, strategy_params)
         log.info("Preset: %s", preset_name)
         log.info("Initial cash: %s", initial_cash)
+        log.info("Regime: %s", regime)
 
         _validate_task_dates(start_date, end_date)
         if strategy_key not in STRATEGY_MAP:
@@ -178,6 +184,7 @@ class BacktestWorkerService:
             initial_cash=initial_cash,
             preset_name=preset_name,
             asset_type=asset_type,
+            regime=regime,
         )
         results = self._format_results(raw_results)
         log.info("Backtest completed for %s", task_id)
