@@ -8,10 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /
 # Copy local dependency packages (context = trading root)
 COPY data-access-lib /deps/data-access-lib
 COPY quant-strategies /deps/quant-strategies
+COPY strategy-cores /deps/strategy-cores
 
-# Install local packages
+# Install local packages. strategy-cores backs the core-driven strategies
+# (daily_sma_cross); without it quant-strategies leaves those keys out of
+# STRATEGY_MAP and every task for them fails with "Unknown strategy".
 RUN pip install --no-cache-dir -e /deps/data-access-lib \
-    && pip install --no-cache-dir -e /deps/quant-strategies
+    && pip install --no-cache-dir -e /deps/quant-strategies \
+    && pip install --no-cache-dir -e /deps/strategy-cores
 
 # Copy requirements and install
 COPY backtest-worker/requirements.txt .

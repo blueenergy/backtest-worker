@@ -14,6 +14,11 @@ if [ "${BACKTEST_REINSTALL_DEPS:-false}" = "true" ]; then
         echo "Reinstalling quant-strategies from mount..."
         pip install --no-cache-dir -q -e /deps/quant-strategies
     fi
+
+    if [ -d "/deps/strategy-cores" ]; then
+        echo "Reinstalling strategy-cores from mount..."
+        pip install --no-cache-dir -q -e /deps/strategy-cores
+    fi
 fi
 
 BACKTEST_ROLE="${BACKTEST_ROLE:-worker}"
