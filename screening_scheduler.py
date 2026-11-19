@@ -193,9 +193,35 @@ def run_screening(days_back: int) -> None:
                 )
             else:
                 log.info("Screening task done: strategy=%s preset=%s", strategy_key, preset)
+        run_k_regime_pool()
         log.info("All screening tasks complete for today.")
     finally:
         release_screening_lock()
+
+
+def run_k_regime_pool() -> None:
+    """Scan five Shenwan L1 industries into the pool under ``strategy_key=k_regime``.
+
+    Same output collections as the strategy screening above, so it runs inside
+    the same lock rather than as a second scheduler. Moved here from
+    stock-scoring-system's 21:00 cron, which was the only reason a pool
+    producer depended on the scoring service.
+    """
+    global _active_child
+    if os.environ.get("SCREENING_SKIP_K_REGIME", "").strip().lower() in {"1", "true", "yes"}:
+        log.info("k_regime pool scan skipped (SCREENING_SKIP_K_REGIME)")
+        return
+    if _shutdown_requested:
+        return
+    log.info("Running k_regime pool scan")
+    cmd = [sys.executable, "scan_k_regime_pool.py", "--log-level", "INFO"]
+    _active_child = subprocess.Popen(cmd, cwd=os.path.dirname(os.path.abspath(__file__)))
+    return_code = _active_child.wait()
+    _active_child = None
+    if return_code != 0:
+        log.error("k_regime pool scan failed: returncode=%d", return_code)
+    else:
+        log.info("k_regime pool scan done")
 
 
 def _terminate_active_child() -> None:
