@@ -67,6 +67,56 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class _ScanDataAccess:
+    """Stands in for stock-scoring-system's ``DatabaseManager``.
+
+    The scan was written against that repo's own DB layer. Porting it here meant
+    only three handles were actually used -- two collections, per-symbol adjusted
+    bars, and the results DB -- so map them onto data-access-lib rather than
+    dragging the scoring layer across.
+
+    ``client`` exists purely because the call sites close it; this class owns no
+    client of its own, so closing is a no-op.
+    """
+
+    def __init__(self) -> None:
+        from stock_data_access.mongo_context import get_db
+
+        self.client = None
+        data_db = get_db()
+        self.sw_index_member = data_db["sw_index_member"]
+        self.stock_info = data_db["stock_info"]
+        self.db = get_db(db_name=os.environ.get("SCREENING_RESULTS_DB", "finance"))
+        self._prices = None
+
+    @property
+    def prices(self):
+        if self._prices is None:
+            from stock_data_access.prices import AdjustedPriceDataAccess
+
+            self._prices = AdjustedPriceDataAccess()
+        return self._prices
+
+    def get_volume_price_data(
+        self,
+        symbol: str,
+        *,
+        start_date: str,
+        end_date: str,
+        adjust: str = "qfq",
+        projection: Any = None,
+    ):
+        frame = self.prices.load_adjusted_ohlc(symbol, start_date, end_date, adjust=adjust)
+        if frame is None or frame.empty:
+            return []
+        # trade_date is both the index label and a column here;
+        # reset_index() would collide with the existing column.
+        rows = frame.reset_index(drop=True).to_dict("records")
+        for row in rows:
+            row.setdefault("vol", row.get("volume"))
+        return rows
+
+
 def _load_universe(db, *, list_date_before: str, limit: int) -> List[Dict[str, str]]:
     members = list(
         db.sw_index_member.find(
@@ -103,9 +153,7 @@ def _load_universe(db, *, list_date_before: str, limit: int) -> List[Dict[str, s
 
 
 def _evaluate_symbol(job: Dict[str, Any]) -> Dict[str, Any] | None:
-    from data_manager import DatabaseManager
-
-    db = DatabaseManager()
+    db = _ScanDataAccess()
     try:
         rows = db.get_volume_price_data(
             job["symbol"],
@@ -176,9 +224,7 @@ def main() -> int:
         }
     )
 
-    from data_manager import DatabaseManager
-
-    db = DatabaseManager()
+    db = _ScanDataAccess()
     universe = _load_universe(db, list_date_before=args.list_date_before, limit=args.limit_symbols)
     log.info(
         "Universe %d symbols | %s -> %s | pool_start=%s | rule=%s | dry_run=%s",
